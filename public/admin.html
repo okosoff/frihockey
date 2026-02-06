@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Phan's Friday Hockey</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text: #ffffff;
+            --accent: #ff6b00;
+            --success: #4CAF50;
+            --danger: #ff4444;
+            --warning: #ff9800;
+        }
+
+        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        body {
+            background-color: var(--bg-color);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1000px;
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid #444;
+        }
+
+        h1 {
+            text-align: center;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            background: #3d3d3d;
+            border: 1px solid #555;
+            color: white;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        button {
+            padding: 12px 20px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        button:hover { background: #ff8533; }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .admin-panel { display: none; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #444;
+        }
+
+        th { color: var(--accent); }
+        
+        .team-white { color: #fff; text-shadow: 0 0 5px rgba(255,255,255,0.5); }
+        .team-dark { color: #888; }
+        
+        .paid-btn {
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            width: auto;
+            background: #444;
+        }
+        .paid-btn.paid { background: var(--success); }
+
+        .remove-btn {
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            width: auto;
+            background: var(--danger);
+            margin: 0;
+        }
+
+        .remove-btn:hover { background: #ff6666; }
+
+        .promote-btn {
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            width: auto;
+            background: var(--success);
+            margin: 0;
+            margin-right: 5px;
+        }
+
+        .promote-btn:hover:not(:disabled) {
+            background: #45a049;
+        }
+
+        .control-box {
+            background: linear-gradient(135deg, #2a2a2a, #333);
+            border: 2px solid var(--accent);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .control-box h3 {
+            margin: 0 0 15px 0;
+            color: var(--accent);
+            font-size: 1.1rem;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .control-input {
+            width: 100px;
+            text-align: center;
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin: 0;
+        }
+
+        .control-btn {
+            width: auto;
+            padding: 10px 15px;
+            margin: 0;
+            font-size: 0.9rem;
+        }
+
+        .status-display {
+            margin-left: auto;
+            font-size: 1rem;
+            color: #aaa;
+        }
+
+        .status-display span {
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        .status-open {
+            color: var(--success) !important;
+        }
+
+        .status-locked {
+            color: var(--danger) !important;
+        }
+
+        .toggle-btn {
+            min-width: 120px;
+        }
+
+        .toggle-btn.locked-state {
+            background: var(--danger);
+        }
+
+        .toggle-btn.open-state {
+            background: var(--success);
+        }
+
+        .schedule-info {
+            background: #1a2a3a;
+            border-left: 4px solid var(--accent);
+            padding: 10px 15px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+
+        .manual-override-warning {
+            background: #3a2a1a;
+            border-left: 4px solid var(--warning);
+            padding: 10px 15px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #ff9800;
+        }
+
+        .restore-btn {
+            background: #666;
+            font-size: 0.8rem;
+            padding: 8px 12px;
+        }
+
+        .details-box {
+            background: linear-gradient(135deg, #1a2a3a, #2a3a4a);
+            border: 2px solid #4a90e2;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .details-box h3 {
+            margin: 0 0 15px 0;
+            color: #4a90e2;
+            font-size: 1.1rem;
+        }
+
+        .add-player-form {
+            background: linear-gradient(135deg, #1a3a1a, #2d4d2d);
+            border: 2px solid var(--success);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .add-player-form h3 {
+            margin: 0 0 15px 0;
+            color: var(--success);
+            font-size: 1.1rem;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .add-btn {
+            background: var(--success);
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .section-header {
+            color: var(--accent);
+            margin: 30px 0 15px 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #444;
+        }
+
+        .waitlist-section {
+            background: linear-gradient(135deg, #3a1a1a, #2d1a1a);
+            border: 2px solid #ff4444;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .waitlist-section h3 {
+            margin: 0 0 15px 0;
+            color: #ff6b00;
+            font-size: 1.1rem;
+        }
+
+        .logout-btn {
+            background: #666;
+            width: auto;
+            padding: 8px 15px;
+            font-size: 0.9rem;
+            float: right;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 20px; }
+            th, td { padding: 8px; font-size: 0.8rem; }
+            .control-row { flex-direction: column; align-items: stretch; }
+            .form-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="loginBox">
+        <h1>Admin Portal</h1>
+        <p style="text-align:center; color:#888;">Phan's Friday Hockey</p>
+        <input type="password" id="adminPass" placeholder="Enter Admin Password">
+        <button onclick="login()" style="width:100%;">Access Dashboard</button>
+        <p id="errorMsg" style="color:#ff4444; text-align:center; display:none;">Wrong Password</p>
+    </div>
+
+    <div class="container admin-panel" id="adminPanel">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h1 style="margin:0;">Admin Dashboard</h1>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+        
+        <div class="details-box">
+            <h3>📍 Game Location & Time</h3>
+            <div class="control-row">
+                <input type="text" id="locationInput" placeholder="Location" style="flex:1;">
+                <input type="text" id="timeInput" placeholder="Time" style="flex:1;">
+                <button class="control-btn" onclick="updateDetails()">Update</button>
+            </div>
+            <div class="status-display" style="margin-top:10px; margin-left:0;">
+                Current: <span id="currentLocation">--</span> | <span id="currentTime">--</span>
+            </div>
+        </div>
+
+        <div class="control-box">
+            <h3>🔧 Spots Available (Max 20)</h3>
+            <div class="control-row">
+                <input type="number" id="spotInput" class="control-input" min="0" max="20" value="20">
+                <button class="control-btn" onclick="updateSpots()">Update</button>
+                <div class="status-display">Current: <span id="currentSpotsDisplay">20</span></div>
+            </div>
+        </div>
+
+        <div class="control-box">
+            <h3>🔒 Signup Lock Control</h3>
+            <div class="control-row">
+                <input type="text" id="codeInput" class="control-input" maxlength="4" placeholder="1234" style="width:80px;">
+                <button class="control-btn" onclick="updateCode()">Change Code</button>
+                <button class="control-btn toggle-btn" id="toggleCodeBtn" onclick="toggleCode()">...</button>
+                <button class="control-btn restore-btn" id="restoreBtn" onclick="restoreSchedule()" style="display:none;">Restore Auto</button>
+                <div class="status-display">
+                    Code: <span id="currentCodeDisplay">----</span> | 
+                    Status: <span id="codeStatusDisplay">...</span>
+                </div>
+            </div>
+            <div class="schedule-info">
+                <strong>📅 Auto Schedule:</strong><br>
+                🔒 <strong>LOCKED:</strong> Saturday 12:00 AM → Monday 6:00 PM ET<br>
+                ✅ <strong>OPEN:</strong> Monday 6:00 PM → Saturday 12:00 AM ET
+            </div>
+            <div class="manual-override-warning" id="overrideWarning" style="display:none;">
+                <strong>⚠️ Manual Override Active</strong>
+            </div>
+        </div>
+
+        <div class="add-player-form">
+            <h3>➕ Add Player Manually</h3>
+            <div class="form-row">
+                <input type="text" id="newFirstName" placeholder="First Name">
+                <input type="text" id="newLastName" placeholder="Last Name">
+            </div>
+            <input type="tel" id="newPhone" placeholder="Phone Number">
+            <div class="form-row">
+                <select id="newPayment">
+                    <option value="Cash">Cash</option>
+                    <option value="E-Transfer">E-Transfer</option>
+                </select>
+                <select id="newTeam">
+                    <option value="">Auto-Assign Team</option>
+                    <option value="White">Team White</option>
+                    <option value="Dark">Team Dark</option>
+                </select>
+            </div>
+            <label style="display:flex; align-items:center; gap:10px; margin:10px 0; color:#aaa;">
+                <input type="checkbox" id="addToWaitlist" style="width:auto;">
+                Add to Waitlist
+            </label>
+            <button class="add-btn" onclick="addPlayer()">Add Player</button>
+        </div>
+
+        <h3 class="section-header">🏒 Registered Players (<span id="playerCount">0</span>)</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Team</th>
+                    <th>Name</th>
+                    <th>Phone</th>
+                    <th>Payment</th>
+                    <th>Paid</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="playerList"></tbody>
+        </table>
+
+        <div class="waitlist-section">
+            <h3>⏳ Waitlist (<span id="waitlistCount">0</span>)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Name</th>
+                        <th>Phone</th>
+                        <th>Payment</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="waitlistList"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+        const SESSION_KEY = 'hockey_admin_session';
+        let sessionToken = localStorage.getItem(SESSION_KEY) || "";
+
+        async function checkSession() {
+            if (!sessionToken) {
+                showLogin();
+                return;
+            }
+            const res = await fetch(`${API_URL}/api/admin/check-session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken })
+            });
+            const data = await res.json();
+            if (data.loggedIn) {
+                showDashboard();
+                loadData();
+                loadSettings();
+            } else {
+                localStorage.removeItem(SESSION_KEY);
+                sessionToken = "";
+                showLogin();
+            }
+        }
+
+        function showLogin() {
+            document.getElementById('loginBox').style.display = 'block';
+            document.getElementById('adminPanel').style.display = 'none';
+        }
+
+        function showDashboard() {
+            document.getElementById('loginBox').style.display = 'none';
+            document.getElementById('adminPanel').style.display = 'block';
+        }
+
+        async function login() {
+            const pass = document.getElementById('adminPass').value;
+            const res = await fetch(`${API_URL}/api/admin/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: pass })
+            });
+            const data = await res.json();
+            if (data.success) {
+                sessionToken = data.sessionToken;
+                localStorage.setItem(SESSION_KEY, sessionToken);
+                showDashboard();
+                loadData();
+                loadSettings();
+            } else {
+                document.getElementById('errorMsg').style.display = 'block';
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem(SESSION_KEY);
+            sessionToken = "";
+            showLogin();
+        }
+
+        document.getElementById('adminPass').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') login();
+        });
+
+        async function loadSettings() {
+            const res = await fetch(`${API_URL}/api/admin/settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken })
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            
+            document.getElementById('currentLocation').innerText = data.location;
+            document.getElementById('currentTime').innerText = data.time;
+            document.getElementById('locationInput').value = data.location;
+            document.getElementById('timeInput').value = data.time;
+            document.getElementById('currentCodeDisplay').innerText = data.code;
+            document.getElementById('codeInput').value = data.code;
+            
+            const statusSpan = document.getElementById('codeStatusDisplay');
+            const toggleBtn = document.getElementById('toggleCodeBtn');
+            
+            if (data.requireCode) {
+                statusSpan.innerText = "LOCKED";
+                statusSpan.className = "status-locked";
+                toggleBtn.innerText = "Unlock Signup";
+                toggleBtn.className = "control-btn toggle-btn locked-state";
+            } else {
+                statusSpan.innerText = "OPEN";
+                statusSpan.className = "status-open";
+                toggleBtn.innerText = "Lock Signup";
+                toggleBtn.className = "control-btn toggle-btn open-state";
+            }
+
+            if (data.manualOverride) {
+                document.getElementById('overrideWarning').style.display = 'block';
+                document.getElementById('restoreBtn').style.display = 'inline-block';
+            } else {
+                document.getElementById('overrideWarning').style.display = 'none';
+                document.getElementById('restoreBtn').style.display = 'none';
+            }
+        }
+
+        async function updateDetails() {
+            const location = document.getElementById('locationInput').value;
+            const time = document.getElementById('timeInput').value;
+            const res = await fetch(`${API_URL}/api/admin/update-details`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken, location: location, time: time })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                document.getElementById('currentLocation').innerText = data.location;
+                document.getElementById('currentTime').innerText = data.time;
+                alert("Game details updated!");
+            } else if (res.status === 401) {
+                logout();
+            }
+        }
+
+        async function updateCode() {
+            const newCode = document.getElementById('codeInput').value;
+            if (!/^\d{4}$/.test(newCode)) {
+                alert("Code must be exactly 4 digits");
+                return;
+            }
+            const res = await fetch(`${API_URL}/api/admin/update-code`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken, newCode: newCode })
+            });
+            if (res.ok) {
+                loadSettings();
+                alert("Code updated to: " + newCode);
+            } else if (res.status === 401) {
+                logout();
+            }
+        }
+
+        async function toggleCode() {
+            const res = await fetch(`${API_URL}/api/admin/toggle-code`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken })
+            });
+            if (res.ok) {
+                loadSettings();
+                const data = await res.json();
+                alert(data.requireCode ? "Signup is now LOCKED" : "Signup is now OPEN");
+            } else if (res.status === 401) {
+                logout();
+            }
+        }
+
+        async function restoreSchedule() {
+            if (!confirm("Restore auto-schedule?")) return;
+            const res = await fetch(`${API_URL}/api/admin/reset-schedule`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken })
+            });
+            if (res.ok) {
+                loadSettings();
+                alert("Auto-schedule restored!");
+            } else if (res.status === 401) {
+                logout();
+            }
+        }
+
+        // FIXED: Using event delegation for dynamic buttons
+        async function loadData() {
+            const res = await fetch(`${API_URL}/api/admin/players`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken })
+            });
+            if (!res.ok) {
+                logout();
+                return;
+            }
+            const data = await res.json();
+
+            document.getElementById('currentSpotsDisplay').innerText = data.spots;
+            document.getElementById('spotInput').value = data.spots;
+            document.getElementById('playerCount').innerText = data.players.length;
+            document.getElementById('waitlistCount').innerText = data.waitlist.length;
+            
+            // Players table
+            const tbody = document.getElementById('playerList');
+            tbody.innerHTML = '';
+            if (data.players.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#666; padding:30px;">No players registered</td></tr>';
+            } else {
+                data.players.forEach(p => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td class="${p.team === 'White' ? 'team-white' : 'team-dark'}">${p.team}</td>
+                        <td>${p.firstName} ${p.lastName}</td>
+                        <td>${p.phone}</td>
+                        <td>${p.paymentMethod}</td>
+                        <td>
+                            <button class="paid-btn ${p.paid ? 'paid' : ''}" onclick="togglePaid(${p.id})">
+                                ${p.paid ? 'PAID' : 'NO'}
+                            </button>
+                        </td>
+                        <td>
+                            <button class="remove-btn" onclick="removePlayer(${p.id})">Remove</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+
+            // Waitlist table - FIXED: Store player ID in data attribute
+            const waitlistBody = document.getElementById('waitlistList');
+            waitlistBody.innerHTML = '';
+            if (data.waitlist.length === 0) {
+                waitlistBody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#666; padding:30px;">No one on waitlist</td></tr>';
+            } else {
+                data.waitlist.forEach((p, index) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${index + 1}</td>
+                        <td>${p.firstName} ${p.lastName}</td>
+                        <td>${p.phone}</td>
+                        <td>${p.paymentMethod}</td>
+                        <td>
+                            <button class="promote-btn" data-player-id="${p.id}" ${data.spots <= 0 ? 'disabled' : ''}>Promote</button>
+                            <button class="remove-btn" onclick="removeWaitlist(${p.id})">Remove</button>
+                        </td>
+                    `;
+                    waitlistBody.appendChild(tr);
+                });
+            }
+        }
+
+        // FIXED: Event delegation for promote buttons
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.classList.contains('promote-btn')) {
+                const playerId = parseInt(e.target.getAttribute('data-player-id'));
+                promotePlayer(playerId);
+            }
+        });
+
+        async function promotePlayer(id) {
+            console.log("Promoting player ID:", id);
+            
+            if (!confirm("Promote this player from waitlist to game?")) return;
+
+            try {
+                const res = await fetch(`${API_URL}/api/admin/promote-waitlist`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionToken: sessionToken, waitlistId: id })
+                });
+
+                console.log("Response status:", res.status);
+
+                if (res.status === 401) {
+                    logout();
+                    return;
+                }
+
+                if (res.ok) {
+                    const data = await res.json();
+                    console.log("Success:", data);
+                    alert(`Player promoted!\nAssigned to: Team ${data.player.team}`);
+                    loadData();
+                } else {
+                    const err = await res.json();
+                    console.error("Error:", err);
+                    alert(err.error || "Error promoting player");
+                }
+            } catch (error) {
+                console.error("Fetch error:", error);
+                alert("Network error - check console");
+            }
+        }
+
+        async function updateSpots() {
+            const newSpots = document.getElementById('spotInput').value;
+            const res = await fetch(`${API_URL}/api/admin/update-spots`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken, newSpots: newSpots })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                document.getElementById('currentSpotsDisplay').innerText = data.spots;
+                loadData();
+            } else if (res.status === 401) {
+                logout();
+            }
+        }
+
+        async function addPlayer() {
+            const firstName = document.getElementById('newFirstName').value;
+            const lastName = document.getElementById('newLastName').value;
+            const phone = document.getElementById('newPhone').value;
+            const paymentMethod = document.getElementById('newPayment').value;
+            const team = document.getElementById('newTeam').value;
+            const toWaitlist = document.getElementById('addToWaitlist').checked;
+
+            if (!firstName || !lastName || !phone) {
+                alert("Please fill in first name, last name, and phone");
+                return;
+            }
+
+            const res = await fetch(`${API_URL}/api/admin/add-player`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionToken: sessionToken,
+                    firstName,
+                    lastName,
+                    phone,
+                    paymentMethod,
+                    team,
+                    toWaitlist
+                })
+            });
+
+            if (res.ok) {
+                document.getElementById('newFirstName').value = '';
+                document.getElementById('newLastName').value = '';
+                document.getElementById('newPhone').value = '';
+                document.getElementById('newTeam').value = '';
+                document.getElementById('addToWaitlist').checked = false;
+                loadData();
+            } else if (res.status === 401) {
+                logout();
+            } else {
+                const err = await res.json();
+                alert(err.error || "Error adding player");
+            }
+        }
+
+        async function removePlayer(id) {
+            if (!confirm("Remove this player?")) return;
+            const res = await fetch(`${API_URL}/api/admin/remove-player`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken, playerId: id })
+            });
+            if (res.status === 401) {
+                logout();
+                return;
+            }
+            loadData();
+        }
+
+        async function removeWaitlist(id) {
+            if (!confirm("Remove from waitlist?")) return;
+            const res = await fetch(`${API_URL}/api/admin/remove-waitlist`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken, waitlistId: id })
+            });
+            if (res.status === 401) {
+                logout();
+                return;
+            }
+            loadData();
+        }
+
+        async function togglePaid(id) {
+            const res = await fetch(`${API_URL}/api/admin/toggle-paid`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionToken: sessionToken, playerId: id })
+            });
+            if (res.status === 401) {
+                logout();
+                return;
+            }
+            loadData();
+        }
+
+        setInterval(() => {
+            if (document.getElementById('adminPanel').style.display === 'block') {
+                loadData();
+                loadSettings();
+            }
+        }, 10000);
+
+        checkSession();
+    </script>
+</body>
+</html>

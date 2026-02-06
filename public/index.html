@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phan's Friday Hockey</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text: #ffffff;
+            --accent: #ff6b00;
+            --input-bg: #3d3d3d;
+        }
+
+        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        body {
+            background-color: var(--bg-color);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid #444;
+        }
+
+        h1 {
+            text-align: center;
+            color: var(--accent);
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .game-info {
+            background: linear-gradient(135deg, #2a2a2a, #333);
+            border: 2px solid var(--accent);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .game-location {
+            font-size: 1.3rem;
+            font-weight: bold;
+            color: var(--accent);
+            margin-bottom: 5px;
+        }
+
+        .game-time {
+            font-size: 1.1rem;
+            color: #ccc;
+        }
+
+        .spot-counter {
+            background: linear-gradient(135deg, #333, #444);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin: 20px 0;
+            border: 2px solid var(--accent);
+        }
+
+        .spot-number {
+            font-size: 4rem;
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        .spot-text { font-size: 1.2rem; color: #ccc; }
+
+        .full-badge {
+            background: #ff4444;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            display: inline-block;
+            margin: 10px 0;
+        }
+
+        .waitlist-mode {
+            background: linear-gradient(135deg, #3a1a1a, #4d2d2d);
+            border: 2px solid #ff6b00;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 15px 0;
+            text-align: center;
+        }
+
+        .waitlist-mode h3 {
+            color: #ff6b00;
+            margin: 0 0 10px 0;
+        }
+
+        .waitlist-mode p {
+            color: #ccc;
+            margin: 0;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            background: var(--input-bg);
+            border: 1px solid #555;
+            color: white;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        button {
+            width: 100%;
+            padding: 15px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        button:hover { background: #ff8533; }
+
+        .payment-options {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+        }
+
+        .payment-options label {
+            flex: 1;
+            padding: 10px;
+            background: var(--input-bg);
+            border-radius: 5px;
+            text-align: center;
+            cursor: pointer;
+            border: 2px solid transparent;
+        }
+
+        .payment-options input { display: none; }
+        .payment-options input:checked + label {
+            border-color: var(--accent);
+            background: #4d4d4d;
+        }
+
+        @keyframes flashWhite {
+            0%, 100% { background-color: rgba(255, 255, 255, 0.1); color: #fff; text-shadow: 0 0 20px #fff; }
+            50% { background-color: rgba(255, 255, 255, 0.3); color: #fff; text-shadow: 0 0 40px #fff, 0 0 60px #fff; }
+        }
+
+        @keyframes flashDark {
+            0%, 100% { background-color: rgba(0, 0, 0, 0.3); color: #888; border: 2px solid #444; }
+            50% { background-color: rgba(0, 0, 0, 0.6); color: #aaa; border: 2px solid #666; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
+        }
+
+        .team-flash-white {
+            animation: flashWhite 1s infinite;
+            padding: 30px;
+            border-radius: 15px;
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-align: center;
+            margin: 20px 0;
+            border: 2px solid #fff;
+        }
+
+        .team-flash-dark {
+            animation: flashDark 1s infinite;
+            padding: 30px;
+            border-radius: 15px;
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-align: center;
+            margin: 20px 0;
+            background: #111;
+        }
+
+        .code-entry {
+            background: linear-gradient(135deg, #2a1a3a, #3d2d4d);
+            border: 2px solid var(--accent);
+            border-radius: 10px;
+            padding: 25px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .code-entry h3 {
+            margin: 0 0 15px 0;
+            color: var(--accent);
+        }
+
+        .code-inputs {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin: 15px 0;
+        }
+
+        .code-digit {
+            width: 60px;
+            height: 70px;
+            font-size: 2rem;
+            text-align: center;
+            background: var(--input-bg);
+            border: 2px solid #555;
+            border-radius: 10px;
+            color: white;
+            margin: 0;
+        }
+
+        .code-digit:focus {
+            border-color: var(--accent);
+            outline: none;
+        }
+
+        .open-signup-notice {
+            background: linear-gradient(135deg, #1a3a1a, #2d4d2d);
+            border: 2px solid #4CAF50;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+            color: #4CAF50;
+        }
+
+        .view-waitlist-btn {
+            background: #ff6b00;
+            margin-top: 15px;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 20px; }
+            .spot-number { font-size: 3rem; }
+            .team-flash-white, .team-flash-dark { font-size: 2rem; padding: 20px; }
+            .code-digit { width: 50px; height: 60px; font-size: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="playerView">
+        <h1>Phan's Friday Hockey</h1>
+        
+        <div class="game-info">
+            <div class="game-location" id="gameLocation">Loading...</div>
+            <div class="game-time" id="gameTime">Loading...</div>
+        </div>
+
+        <div id="registrationArea">
+            <!-- Spots Counter -->
+            <div class="spot-counter" id="spotCounter">
+                <div class="spot-number" id="spotsLeft">--</div>
+                <div class="spot-text" id="spotsText">Spots Available</div>
+            </div>
+
+            <!-- Full/Waitlist Mode Indicator -->
+            <div class="waitlist-mode" id="waitlistMode" style="display:none;">
+                <h3>🏒 GAME FULL - JOIN WAITLIST</h3>
+                <p>Enter your info below to join the waitlist.<br>You'll be contacted if a spot opens up.</p>
+            </div>
+
+            <!-- Code Entry (always required if locked) -->
+            <div id="codeSection">
+                <div class="code-entry" id="codeEntryBox">
+                    <h3 id="codeTitle">🔒 Enter 4-Digit Code to Sign Up</h3>
+                    <div class="code-inputs">
+                        <input type="text" class="code-digit" maxlength="1" id="code1" onkeyup="moveToNext(this, 'code2')" oninput="validateDigit(this)">
+                        <input type="text" class="code-digit" maxlength="1" id="code2" onkeyup="moveToNext(this, 'code3')" oninput="validateDigit(this)">
+                        <input type="text" class="code-digit" maxlength="1" id="code3" onkeyup="moveToNext(this, 'code4')" oninput="validateDigit(this)">
+                        <input type="text" class="code-digit" maxlength="1" id="code4" onkeyup="checkCodeEnter(event)" oninput="validateDigit(this)">
+                    </div>
+                    <button onclick="verifyCode()">Continue</button>
+                    <p id="codeError" style="color:#ff4444; display:none; margin-top:10px;">Invalid code</p>
+                </div>
+
+                <div class="open-signup-notice" id="openNotice" style="display:none;">
+                    <h3>✅ Signup is Open!</h3>
+                    <p>No code required - register below</p>
+                </div>
+            </div>
+
+            <!-- Signup/Waitlist Form (shown after code OR if open) -->
+            <form id="signupForm" style="display:none;">
+                <input type="text" id="firstName" placeholder="First Name" required>
+                <input type="text" id="lastName" placeholder="Last Name" required>
+                <input type="tel" id="phone" placeholder="Phone Number (Required)" required>
+
+                <div style="margin: 15px 0; color: #aaa; font-size: 0.9rem;">Payment Method ($15):</div>
+                
+                <div class="payment-options">
+                    <div>
+                        <input type="radio" name="payment" id="etransfer" value="E-Transfer" checked>
+                        <label for="etransfer">E-Transfer</label>
+                    </div>
+                    <div>
+                        <input type="radio" name="payment" id="cash" value="Cash">
+                        <label for="cash">Cash</label>
+                    </div>
+                </div>
+
+                <div id="etransferInfo" style="background: #222; padding: 10px; border-radius: 5px; font-size: 0.85rem; margin-bottom: 15px;">
+                    Send $15 immediately to: <strong>okosoff@outlook.com</strong><br>
+                    <span style="color: var(--accent);">* Must be paid before game starts *</span>
+                </div>
+
+                <button type="submit" id="submitBtn">Claim My Spot</button>
+                
+                <button type="button" class="view-waitlist-btn" onclick="window.location.href='/waitlist'">View Current Waitlist</button>
+            </form>
+        </div>
+
+        <!-- Success: Joined Game -->
+        <div id="successMessage" style="display:none; text-align:center; padding: 20px;">
+            <h2 style="color: var(--accent);">You're In!</h2>
+            <div id="teamAssignment"></div>
+            <p style="color: #aaa; margin-top: 20px;">See you at <span id="successLocation">the rink</span> <span id="successTime">soon</span>.</p>
+        </div>
+
+        <!-- Success: Joined Waitlist -->
+        <div id="waitlistMessage" style="display:none; text-align:center; padding: 20px;">
+            <h2 style="color: #ff6b00;">You're on the Waitlist!</h2>
+            <p style="font-size: 1.2rem;">Position: <strong id="waitlistPosition">#</strong></p>
+            <p style="color: #aaa; margin-top: 20px;">
+                You'll be contacted if a spot opens up.<br>
+                <a href="/waitlist" style="color:#ff6b00;">View Waitlist</a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+        let verifiedCode = null;
+        let codeRequired = true;
+        let currentLocation = "";
+        let currentTime = "";
+        let spotsAvailable = 20;
+        let isFull = false;
+
+        async function checkStatus() {
+            try {
+                const res = await fetch(`${API_URL}/api/status`);
+                const data = await res.json();
+                
+                currentLocation = data.location;
+                currentTime = data.time;
+                spotsAvailable = data.spotsRemaining;
+                isFull = data.isFull;
+                
+                document.getElementById('gameLocation').innerText = currentLocation;
+                document.getElementById('gameTime').innerText = currentTime;
+                document.getElementById('successLocation').innerText = currentLocation;
+                document.getElementById('successTime').innerText = currentTime;
+                
+                document.getElementById('spotsLeft').innerText = spotsAvailable;
+                codeRequired = data.requireCode;
+                
+                // Update UI based on spots
+                if (spotsAvailable === 0) {
+                    // FULL - Waitlist mode
+                    document.getElementById('spotsText').innerText = 'Waitlist Open';
+                    document.getElementById('spotCounter').style.borderColor = '#ff4444';
+                    document.getElementById('waitlistMode').style.display = 'block';
+                    document.getElementById('codeTitle').innerText = '🔒 Enter Code to Join Waitlist';
+                    document.getElementById('submitBtn').innerText = 'Join Waitlist';
+                } else {
+                    // SPOTS AVAILABLE
+                    document.getElementById('spotsText').innerText = 'Spots Available';
+                    document.getElementById('spotCounter').style.borderColor = 'var(--accent)';
+                    document.getElementById('waitlistMode').style.display = 'none';
+                    document.getElementById('codeTitle').innerText = '🔒 Enter 4-Digit Code to Sign Up';
+                    document.getElementById('submitBtn').innerText = 'Claim My Spot';
+                }
+                
+                // Handle code requirement
+                if (!codeRequired) {
+                    document.getElementById('codeEntryBox').style.display = 'none';
+                    document.getElementById('openNotice').style.display = 'block';
+                    document.getElementById('signupForm').style.display = 'block';
+                }
+                
+            } catch (e) {
+                console.error("Error fetching status", e);
+            }
+        }
+
+        setInterval(checkStatus, 10000);
+        checkStatus();
+
+        function validateDigit(input) {
+            input.value = input.value.replace(/[^0-9]/g, '');
+        }
+
+        function moveToNext(current, nextId) {
+            if (current.value.length === 1) {
+                document.getElementById(nextId).focus();
+            }
+        }
+
+        function checkCodeEnter(event) {
+            if (event.key === 'Enter') verifyCode();
+        }
+
+        async function verifyCode() {
+            const code = document.getElementById('code1').value + 
+                        document.getElementById('code2').value + 
+                        document.getElementById('code3').value + 
+                        document.getElementById('code4').value;
+
+            if (code.length !== 4) {
+                document.getElementById('codeError').style.display = 'block';
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_URL}/api/verify-code`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code })
+                });
+
+                if (res.ok) {
+                    verifiedCode = code;
+                    document.getElementById('codeSection').style.display = 'none';
+                    document.getElementById('signupForm').style.display = 'block';
+                } else {
+                    document.getElementById('codeError').style.display = 'block';
+                    document.getElementById('code1').value = '';
+                    document.getElementById('code2').value = '';
+                    document.getElementById('code3').value = '';
+                    document.getElementById('code4').value = '';
+                    document.getElementById('code1').focus();
+                }
+            } catch (err) {
+                alert("Error verifying code");
+            }
+        }
+
+        document.getElementById('signupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = {
+                firstName: document.getElementById('firstName').value,
+                lastName: document.getElementById('lastName').value,
+                phone: document.getElementById('phone').value,
+                paymentMethod: document.querySelector('input[name="payment"]:checked').value,
+                signupCode: verifiedCode
+            };
+
+            try {
+                const res = await fetch(`${API_URL}/api/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await res.json();
+
+                if (result.success) {
+                    document.getElementById('registrationArea').style.display = 'none';
+                    
+                    if (result.inWaitlist) {
+                        // Show waitlist confirmation
+                        document.getElementById('waitlistMessage').style.display = 'block';
+                        document.getElementById('waitlistPosition').innerText = '#' + result.waitlistPosition;
+                    } else {
+                        // Show team assignment
+                        document.getElementById('successMessage').style.display = 'block';
+                        const teamDiv = document.getElementById('teamAssignment');
+                        teamDiv.innerText = `TEAM ${result.team.toUpperCase()}`;
+                        teamDiv.className = result.team === 'White' ? 'team-flash-white' : 'team-flash-dark';
+                    }
+                } else {
+                    alert(result.error);
+                    checkStatus();
+                }
+            } catch (err) {
+                alert("Error registering. Please try again.");
+            }
+        });
+    </script>
+</body>
+</html>
