@@ -1,0 +1,1333 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
+const { Pool } = require('pg'); // Add this
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Database setup
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
+// --- DATA STORE ---
+let playerSpots = 20;
+let players = []; 
+let waitlist = [];
+const ADMIN_PASSWORD = "964888";
+
+// Game details
+let gameLocation = "Capri Recreation Complex";
+let gameTime = "Friday 9:30 PM";
+let gameDate = "";
+
+// Player signup password protection
+let playerSignupCode = generateRandomCode();
+let requirePlayerCode = true;
+let manualOverride = false;
+
+// Store admin sessions
+let adminSessions = {};
+
+// Weekly reset tracking
+let lastResetWeek = null;
+let rosterReleased = false;
+let currentWeekData = {
+    weekNumber: null,
+    year: null,
+    releaseDate: null,
+    whiteTeam: [],
+    darkTeam: []
+};
+
+const MAX_GOALIES = 2;
+
+const GAME_RULES = [
+    "No Contact, may tie up player along board plays.",
+    "Keep negative comments to yourself.",
+    "Pass the puck!",
+    "Don't stick handle around everyone each and every shift. Don't be a hotdog.",
+    "Shift OFF often.",
+    "No slashing period., lift the bloody stick. If you slash, intentional or not and hurt the opposing player. You are done for the night and future infraction will end in being Banned period.",
+    "Skate hard, shift off when you're huffing and puffing.",
+    "Don't need to be overly aggressive, tone down the aggression. If pickup hockey.",
+    "Slap shots, don't take it if you can't control it. If you hit goalies in the head, or hurt anyone, you are banned from taking slapshots.",
+    "Have fun!"
+];
+
+// --- DATABASE FUNCTIONS ---
+
+async function initDatabase() {
+    try {
+        // Create tables if they don't exist
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS settings (
+                key VARCHAR(50) PRIMARY KEY,
+                value JSONB NOT NULL
+            )
+        `);
+        
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS players (
+                id BIGINT PRIMARY KEY,
+                first_name VARCHAR(100) NOT NULL,
+                last_name VARCHAR(100) NOT NULL,
+                phone VARCHAR(20) NOT NULL,
+                payment_method VARCHAR(20),
+                paid BOOLEAN DEFAULT false,
+                rating INTEGER NOT NULL,
+                is_goalie BOOLEAN DEFAULT false,
+                team VARCHAR(10),
+                registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                rules_agreed BOOLEAN DEFAULT false
+            )
+        `);
+        
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS waitlist (
+                id BIGINT PRIMARY KEY,
+                first_name VARCHAR(100) NOT NULL,
+                last_name VARCHAR(100) NOT NULL,
+                phone VARCHAR(20) NOT NULL,
+                payment_method VARCHAR(20),
+                rating INTEGER NOT NULL,
+                is_goalie BOOLEAN DEFAULT false,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS history (
+                id SERIAL PRIMARY KEY,
+                week_number INTEGER NOT NULL,
+                year INTEGER NOT NULL,
+                release_date TIMESTAMP NOT NULL,
+                game_location VARCHAR(200),
+                game_time VARCHAR(50),
+                game_date DATE,
+                white_team JSONB,
+                dark_team JSONB,
+                white_avg NUMERIC(3,1),
+                dark_avg NUMERIC(3,1)
+            )
+        `);
+        
+        console.log('Database initialized successfully');
+        await loadDataFromDB();
+    } catch (err) {
+        console.error('Database initialization error:', err);
+        // Fall back to file-based if DB fails
+        loadDataFromFile();
+    }
+}
+
+async function loadDataFromDB() {
+    try {
+        // Load settings
+        const settingsRes = await pool.query('SELECT * FROM settings');
+        const settings = {};
+        settingsRes.rows.forEach(row => {
+            settings[row.key] = row.value;
+        });
+        
+        if (settings.playerSpots) playerSpots = settings.playerSpots;
+        if (settings.gameLocation) gameLocation = settings.gameLocation;
+        if (settings.gameTime) gameTime = settings.gameTime;
+        if (settings.gameDate) gameDate = settings.gameDate;
+        if (settings.playerSignupCode) playerSignupCode = settings.playerSignupCode;
+        if (settings.requirePlayerCode !== undefined) requirePlayerCode = settings.requirePlayerCode;
+        if (settings.manualOverride !== undefined) manualOverride = settings.manualOverride;
+        if (settings.lastResetWeek) lastResetWeek = settings.lastResetWeek;
+        if (settings.rosterReleased !== undefined) rosterReleased = settings.rosterReleased;
+        if (settings.currentWeekData) currentWeekData = settings.currentWeekData;
+        
+        // Load players
+        const playersRes = await pool.query('SELECT * FROM players ORDER BY registered_at');
+        players = playersRes.rows.map(p => ({
+            id: p.id,
+            firstName: p.first_name,
+            lastName: p.last_name,
+            phone: p.phone,
+            paymentMethod: p.payment_method,
+            paid: p.paid,
+            rating: p.rating,
+            isGoalie: p.is_goalie,
+            team: p.team,
+            registeredAt: p.registered_at,
+            rulesAgreed: p.rules_agreed
+        }));
+        
+        // Load waitlist
+        const waitlistRes = await pool.query('SELECT * FROM waitlist ORDER BY joined_at');
+        waitlist = waitlistRes.rows.map(p => ({
+            id: p.id,
+            firstName: p.first_name,
+            lastName: p.last_name,
+            phone: p.phone,
+            paymentMethod: p.payment_method,
+            rating: p.rating,
+            isGoalie: p.is_goalie,
+            joinedAt: p.joined_at
+        }));
+        
+        console.log(`Loaded from DB: ${players.length} players, ${waitlist.length} waitlist`);
+    } catch (err) {
+        console.error('Error loading from DB:', err);
+        throw err;
+    }
+}
+
+async function saveSetting(key, value) {
+    try {
+        await pool.query(
+            'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
+            [key, JSON.stringify(value)]
+        );
+    } catch (err) {
+        console.error('Error saving setting:', err);
+    }
+}
+
+async function saveData() {
+    try {
+        await saveSetting('playerSpots', playerSpots);
+        await saveSetting('gameLocation', gameLocation);
+        await saveSetting('gameTime', gameTime);
+        await saveSetting('gameDate', gameDate);
+        await saveSetting('playerSignupCode', playerSignupCode);
+        await saveSetting('requirePlayerCode', requirePlayerCode);
+        await saveSetting('manualOverride', manualOverride);
+        await saveSetting('lastResetWeek', lastResetWeek);
+        await saveSetting('rosterReleased', rosterReleased);
+        await saveSetting('currentWeekData', currentWeekData);
+    } catch (err) {
+        console.error('Error saving data:', err);
+    }
+}
+
+// --- FALLBACK FILE FUNCTIONS (if DB fails) ---
+const DATA_FILE = './data.json';
+
+function generateRandomCode() {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+function loadDataFromFile() {
+    try {
+        if (fs.existsSync(DATA_FILE)) {
+            const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            playerSpots = data.playerSpots ?? 20;
+            players = data.players ?? [];
+            waitlist = data.waitlist ?? [];
+            gameLocation = data.gameLocation ?? "Capri Recreation Complex";
+            gameTime = data.gameTime ?? "Friday 9:30 PM";
+            gameDate = data.gameDate ?? calculateNextFriday();
+            playerSignupCode = data.playerSignupCode ?? generateRandomCode();
+            requirePlayerCode = data.requirePlayerCode ?? true;
+            manualOverride = data.manualOverride ?? false;
+            lastResetWeek = data.lastResetWeek ?? null;
+            rosterReleased = data.rosterReleased ?? false;
+            currentWeekData = data.currentWeekData ?? {
+                weekNumber: null,
+                year: null,
+                releaseDate: null,
+                whiteTeam: [],
+                darkTeam: []
+            };
+            console.log('Data loaded from file (fallback)');
+        } else {
+            gameDate = calculateNextFriday();
+            console.log('New signup code generated:', playerSignupCode);
+        }
+    } catch (err) {
+        console.error('Error loading data:', err);
+        gameDate = calculateNextFriday();
+    }
+}
+
+function saveDataToFile() {
+    try {
+        const data = {
+            playerSpots,
+            players,
+            waitlist,
+            gameLocation,
+            gameTime,
+            gameDate,
+            playerSignupCode,
+            requirePlayerCode,
+            manualOverride,
+            lastResetWeek,
+            rosterReleased,
+            currentWeekData
+        };
+        const tmpFile = DATA_FILE + '.tmp';
+        fs.writeFileSync(tmpFile, JSON.stringify(data, null, 2));
+        fs.renameSync(tmpFile, DATA_FILE);
+    } catch (err) {
+        console.error('Error saving data:', err);
+    }
+}
+
+function calculateNextFriday() {
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+    const nextFriday = new Date(today);
+    nextFriday.setDate(today.getDate() + daysUntilFriday);
+    return nextFriday.toISOString().split('T')[0];
+}
+
+function formatGameDate(dateString) {
+    if (!dateString) return "TBD";
+    const date = new Date(dateString + 'T00:00:00');
+    const options = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' };
+    return date.toLocaleDateString('en-US', options);
+}
+
+// --- TIME FUNCTIONS ---
+function getCurrentETTime() {
+    const now = new Date();
+    const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    return etTime;
+}
+
+function getWeekNumber(date) {
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    return {
+        week: Math.ceil((((d - yearStart) / 86400000) + 1) / 7),
+        year: d.getUTCFullYear()
+    };
+}
+
+function shouldBeLocked() {
+    const etTime = getCurrentETTime();
+    const day = etTime.getDay();
+    const hour = etTime.getHours();
+    
+    if (day === 6) return true;  // Saturday all day
+    if (day === 0) return true;  // Sunday all day
+    if (day === 1 && hour < 18) return true;  // Monday before 6 PM
+    return false;
+}
+
+// FIXED: checkAutoLock now properly enforces lock window regardless of manualOverride
+function checkAutoLock() {
+    const shouldLock = shouldBeLocked();
+    
+    if (shouldLock) {
+        // CRITICAL FIX: Always enforce lock during locked window (Sat 12am - Mon 6pm ET)
+        // Reset manual override when entering lock window to ensure schedule works
+        if (manualOverride) {
+            manualOverride = false;
+            console.log("Auto-schedule restored - entering mandatory lock window (Sat-Mon)");
+        }
+        if (!requirePlayerCode) {
+            requirePlayerCode = true;
+            console.log("Auto-locked: Saturday 12am to Monday 6pm ET window active");
+        }
+        saveData();
+    } else {
+        // Outside locked window (Mon 6pm - Sat 12am) - respect manual override
+        if (!manualOverride && requirePlayerCode) {
+            requirePlayerCode = false;
+            console.log("Auto-unlocked: Monday 6pm ET reached");
+            saveData();
+        }
+    }
+}
+
+function checkWeeklyReset() {
+    const etTime = getCurrentETTime();
+    const { week: currentWeek, year: currentYear } = getWeekNumber(etTime);
+    const day = etTime.getDay();
+    
+    if (day === 5 && (lastResetWeek !== currentWeek || currentWeekData.year !== currentYear)) {
+        console.log(`Weekly reset triggered for week ${currentWeek}, ${currentYear}`);
+        
+        if (rosterReleased && currentWeekData.weekNumber && 
+            (currentWeekData.whiteTeam.length > 0 || currentWeekData.darkTeam.length > 0)) {
+            saveWeekHistory(
+                currentWeekData.year,
+                currentWeekData.weekNumber,
+                currentWeekData.whiteTeam,
+                currentWeekData.darkTeam
+            );
+        }
+        
+        playerSpots = 20;
+        players = [];
+        waitlist = [];
+        rosterReleased = false;
+        lastResetWeek = currentWeek;
+        gameDate = calculateNextFriday();
+        currentWeekData = {
+            weekNumber: currentWeek,
+            year: currentYear,
+            releaseDate: null,
+            whiteTeam: [],
+            darkTeam: []
+        };
+        
+        saveData();
+        console.log("New week started - registration reset");
+    }
+}
+
+setInterval(() => {
+    checkAutoLock();
+    checkWeeklyReset();
+    saveData();
+}, 60000);
+
+checkAutoLock();
+checkWeeklyReset();
+
+// --- HELPER FUNCTIONS ---
+function validatePhoneNumber(phone) {
+    const cleaned = phone.replace(/\D/g, '');
+    return cleaned.length === 10;
+}
+
+function formatPhoneNumber(phone) {
+    const cleaned = phone.replace(/\D/g, '');
+    const match = cleaned.match(/^(\d{3})(\d{3})(\d{4})$/);
+    if (match) {
+        return '(' + match[1] + ') ' + match[2] + '-' + match[3];
+    }
+    return phone;
+}
+
+function isDuplicatePlayer(firstName, lastName, phone) {
+    const normalizedName = (firstName + ' ' + lastName).toLowerCase().trim();
+    const normalizedPhone = phone.replace(/\D/g, '');
+    
+    const inPlayers = players.find(p => 
+        (p.firstName + ' ' + p.lastName).toLowerCase().trim() === normalizedName ||
+        p.phone.replace(/\D/g, '') === normalizedPhone
+    );
+    
+    const inWaitlist = waitlist.find(p => 
+        (p.firstName + ' ' + p.lastName).toLowerCase().trim() === normalizedName ||
+        p.phone.replace(/\D/g, '') === normalizedPhone
+    );
+    
+    return inPlayers || inWaitlist;
+}
+
+function getPlayerCount() {
+    return players.filter(p => !p.isGoalie).length;
+}
+
+function getGoalieCount() {
+    return players.filter(p => p.isGoalie).length;
+}
+
+function isGoalieSpotsAvailable() {
+    return getGoalieCount() < MAX_GOALIES;
+}
+
+function generateFairTeams() {
+    console.log('Generating teams from players:', players.length);
+    
+    const goalies = players.filter(p => p.isGoalie);
+    const skaters = players.filter(p => !p.isGoalie);
+    
+    skaters.sort((a, b) => (parseInt(b.rating) || 0) - (parseInt(a.rating) || 0));
+    
+    let whiteTeam = [];
+    let darkTeam = [];
+    let whiteRating = 0;
+    let darkRating = 0;
+    
+    if (goalies.length >= 2) {
+        whiteTeam.push({ ...goalies[0], team: 'White' });
+        darkTeam.push({ ...goalies[1], team: 'Dark' });
+        whiteRating += parseInt(goalies[0].rating) || 0;
+        darkRating += parseInt(goalies[1].rating) || 0;
+    } else if (goalies.length === 1) {
+        whiteTeam.push({ ...goalies[0], team: 'White' });
+        whiteRating += parseInt(goalies[0].rating) || 0;
+    }
+    
+    let whiteTurn = whiteTeam.length <= darkTeam.length;
+    
+    for (let i = 0; i < skaters.length; i++) {
+        const skater = skaters[i];
+        
+        if (whiteTurn) {
+            whiteTeam.push({ ...skater, team: 'White' });
+            whiteRating += parseInt(skater.rating) || 0;
+        } else {
+            darkTeam.push({ ...skater, team: 'Dark' });
+            darkRating += parseInt(skater.rating) || 0;
+        }
+        
+        whiteTurn = !whiteTurn;
+        
+        if (Math.abs(whiteTeam.length - darkTeam.length) > 1) {
+            whiteTurn = whiteTeam.length < darkTeam.length;
+        }
+    }
+    
+    players = [...whiteTeam, ...darkTeam];
+    
+    return { whiteTeam, darkTeam, whiteRating, darkRating };
+}
+
+// Save weekly history to database
+async function saveWeekHistory(year, weekNumber, whiteTeam, darkTeam) {
+    try {
+        const whiteAvg = (whiteTeam.reduce((sum, p) => sum + (parseInt(p.rating) || 0), 0) / whiteTeam.length).toFixed(1);
+        const darkAvg = (darkTeam.reduce((sum, p) => sum + (parseInt(p.rating) || 0), 0) / darkTeam.length).toFixed(1);
+        
+        await pool.query(
+            `INSERT INTO history (week_number, year, release_date, game_location, game_time, game_date, white_team, dark_team, white_avg, dark_avg)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+                weekNumber,
+                year,
+                new Date(),
+                gameLocation,
+                gameTime,
+                gameDate,
+                JSON.stringify(whiteTeam),
+                JSON.stringify(darkTeam),
+                whiteAvg,
+                darkAvg
+            ]
+        );
+        
+        console.log(`Week history saved: Week ${weekNumber}, ${year}`);
+    } catch (err) {
+        console.error('Error saving week history:', err);
+    }
+}
+
+// Get all historical weeks from DB
+async function getHistoryList() {
+    try {
+        const res = await pool.query(
+            'SELECT week_number, year, release_date FROM history ORDER BY year DESC, week_number DESC'
+        );
+        return res.rows.map(row => ({
+            weekNumber: row.week_number,
+            year: row.year,
+            created: row.release_date
+        }));
+    } catch (err) {
+        console.error('Error reading history:', err);
+        return [];
+    }
+}
+
+// Get specific week history from DB
+async function getWeekHistory(year, weekNumber) {
+    try {
+        const res = await pool.query(
+            'SELECT * FROM history WHERE year = $1 AND week_number = $2',
+            [year, weekNumber]
+        );
+        
+        if (res.rows.length > 0) {
+            const row = res.rows[0];
+            return {
+                weekNumber: row.week_number,
+                year: row.year,
+                releaseDate: row.release_date,
+                gameLocation: row.game_location,
+                gameTime: row.game_time,
+                gameDate: row.game_date,
+                whiteTeam: row.white_team,
+                darkTeam: row.dark_team,
+                whiteTeamAvg: row.white_avg,
+                darkTeamAvg: row.dark_avg
+            };
+        }
+        return null;
+    } catch (err) {
+        console.error('Error reading week history:', err);
+        return null;
+    }
+}
+
+// --- ROUTES ---
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/waitlist', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'waitlist.html'));
+});
+
+app.get('/roster', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'roster.html'));
+});
+
+app.get('/history', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'history.html'));
+});
+
+app.get('/rules', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'rules.html'));
+});
+
+// --- PUBLIC API ---
+app.get('/api/status', (req, res) => {
+    checkAutoLock();
+    const etTime = getCurrentETTime();
+    const { week, year } = getWeekNumber(etTime);
+    
+    const playerCount = getPlayerCount();
+    const goalieCount = getGoalieCount();
+    
+    res.json({
+        playerSpotsRemaining: playerSpots > 0 ? playerSpots : 0,
+        goalieCount: goalieCount,
+        goalieSpotsAvailable: MAX_GOALIES - goalieCount,
+        maxGoalies: MAX_GOALIES,
+        totalPlayers: players.length,
+        isFull: playerSpots === 0,
+        waitlistCount: waitlist.length,
+        requireCode: requirePlayerCode,
+        isLockedWindow: shouldBeLocked(),
+        location: gameLocation,
+        time: gameTime,
+        date: gameDate,
+        formattedDate: formatGameDate(gameDate),
+        rosterReleased: rosterReleased,
+        currentWeek: week,
+        currentYear: year,
+        rules: GAME_RULES
+    });
+});
+
+app.get('/api/waitlist', (req, res) => {
+    const waitlistNames = waitlist.map((p, index) => ({
+        position: index + 1,
+        fullName: `${p.firstName} ${p.lastName}`,
+        isGoalie: p.isGoalie
+    }));
+    
+    res.json({
+        waitlist: waitlistNames,
+        totalWaitlist: waitlist.length,
+        location: gameLocation,
+        time: gameTime,
+        date: gameDate,
+        formattedDate: formatGameDate(gameDate)
+    });
+});
+
+app.get('/api/roster', (req, res) => {
+    if (!rosterReleased) {
+        return res.json({
+            released: false,
+            message: "Roster has not been released yet",
+            releaseTime: "Check with admin"
+        });
+    }
+    
+    const whiteTeam = players.filter(p => p.team === 'White').sort((a, b) => {
+        if (a.isGoalie && !b.isGoalie) return -1;
+        if (!a.isGoalie && b.isGoalie) return 1;
+        return (parseInt(b.rating) || 0) - (parseInt(a.rating) || 0);
+    });
+    
+    const darkTeam = players.filter(p => p.team === 'Dark').sort((a, b) => {
+        if (a.isGoalie && !b.isGoalie) return -1;
+        if (!a.isGoalie && b.isGoalie) return 1;
+        return (parseInt(b.rating) || 0) - (parseInt(a.rating) || 0);
+    });
+    
+    const whiteRating = whiteTeam.reduce((sum, p) => sum + (parseInt(p.rating) || 0), 0);
+    const darkRating = darkTeam.reduce((sum, p) => sum + (parseInt(p.rating) || 0), 0);
+    
+    res.json({
+        released: true,
+        whiteTeam,
+        darkTeam,
+        whiteRating: (whiteRating / whiteTeam.length).toFixed(1),
+        darkRating: (darkRating / darkTeam.length).toFixed(1),
+        location: gameLocation,
+        time: gameTime,
+        date: gameDate,
+        formattedDate: formatGameDate(gameDate),
+        weekNumber: currentWeekData.weekNumber,
+        year: currentWeekData.year
+    });
+});
+
+// History API
+app.get('/api/history', async (req, res) => {
+    const history = await getHistoryList();
+    res.json({ history });
+});
+
+app.get('/api/history/:year/:week', async (req, res) => {
+    const { year, week } = req.params;
+    const weekData = await getWeekHistory(parseInt(year), parseInt(week));
+    
+    if (weekData) {
+        res.json(weekData);
+    } else {
+        res.status(404).json({ error: "Week not found" });
+    }
+});
+
+app.post('/api/verify-code', (req, res) => {
+    checkAutoLock();
+    
+    const { code } = req.body;
+    
+    if (!requirePlayerCode) {
+        return res.json({ valid: true, message: "Signup is open to all" });
+    }
+    
+    if (code === playerSignupCode) {
+        res.json({ valid: true });
+    } else {
+        res.status(401).json({ valid: false, error: "Invalid code" });
+    }
+});
+
+// Step 1: Initial registration
+app.post('/api/register-init', async (req, res) => {
+    checkAutoLock();
+    
+    if (requirePlayerCode) {
+        const { signupCode } = req.body;
+        if (signupCode !== playerSignupCode) {
+            return res.status(401).json({ error: "Invalid or missing signup code" });
+        }
+    }
+    
+    const { firstName, lastName, phone, paymentMethod, rating } = req.body;
+
+    if (!firstName || !lastName || !phone || !paymentMethod || !rating) {
+        return res.status(400).json({ error: "All fields are required." });
+    }
+
+    if (isDuplicatePlayer(firstName, lastName, phone)) {
+        return res.status(400).json({ error: "A player with this name or phone number is already registered." });
+    }
+
+    if (!validatePhoneNumber(phone)) {
+        return res.status(400).json({ error: "Please enter a valid 10-digit phone number." });
+    }
+
+    const ratingNum = parseInt(rating);
+    if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 10) {
+        return res.status(400).json({ error: "Rating must be a number between 1 and 10." });
+    }
+    
+    if (playerSpots <= 0) {
+        const formattedPhone = formatPhoneNumber(phone);
+        const waitlistPlayer = {
+            id: Date.now(),
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phone: formattedPhone,
+            paymentMethod,
+            rating: ratingNum,
+            isGoalie: false,
+            joinedAt: new Date()
+        };
+
+        try {
+            await pool.query(
+                `INSERT INTO waitlist (id, first_name, last_name, phone, payment_method, rating, is_goalie)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [waitlistPlayer.id, waitlistPlayer.firstName, waitlistPlayer.lastName, 
+                 waitlistPlayer.phone, waitlistPlayer.paymentMethod, waitlistPlayer.rating, false]
+            );
+            waitlist.push(waitlistPlayer);
+        } catch (err) {
+            console.error('Error adding to waitlist:', err);
+        }
+        
+        return res.json({
+            success: true,
+            inWaitlist: true,
+            waitlistPosition: waitlist.length,
+            message: "Game is full. You have been added to the waitlist."
+        });
+    }
+
+    res.json({ 
+        success: true, 
+        proceedToRules: true,
+        isGoalie: false,
+        tempData: {
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phone: formatPhoneNumber(phone),
+            paymentMethod,
+            rating: ratingNum,
+            isGoalie: false
+        }
+    });
+});
+
+// Step 2: Final registration
+app.post('/api/register-final', async (req, res) => {
+    const { tempData, rulesAgreed } = req.body;
+    
+    if (!rulesAgreed) {
+        return res.status(400).json({ error: "You must agree to the rules to register." });
+    }
+    
+    if (!tempData || !tempData.firstName) {
+        return res.status(400).json({ error: "Registration data missing." });
+    
+    }
+    
+    if (isDuplicatePlayer(tempData.firstName, tempData.lastName, tempData.phone)) {
+        return res.status(400).json({ error: "A player with this name or phone number is already registered." });
+    }
+    
+    const newPlayer = {
+        id: Date.now(),
+        firstName: tempData.firstName,
+        lastName: tempData.lastName,
+        phone: tempData.phone,
+        paymentMethod: tempData.paymentMethod,
+        paid: false,
+        rating: parseInt(tempData.rating) || 5,
+        isGoalie: false,
+        team: null,
+        registeredAt: new Date().toISOString(),
+        rulesAgreed: true
+    };
+
+    try {
+        await pool.query(
+            `INSERT INTO players (id, first_name, last_name, phone, payment_method, paid, rating, is_goalie, team, rules_agreed)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [newPlayer.id, newPlayer.firstName, newPlayer.lastName, newPlayer.phone,
+             newPlayer.paymentMethod, newPlayer.paid, newPlayer.rating, false, null, true]
+        );
+        players.push(newPlayer);
+        playerSpots--;
+        await saveData();
+    } catch (err) {
+        console.error('Error saving player:', err);
+        return res.status(500).json({ error: "Database error" });
+    }
+
+    res.json({ 
+        success: true, 
+        inWaitlist: false,
+        message: `You're registered! Payment must be received by Friday 12PM or your spot will be offered to the next person on the waitlist.`,
+        paymentDeadline: "Friday 12PM",
+        rosterReleaseTime: "Teams released after admin generates roster",
+        isGoalie: false
+    });
+});
+
+// --- ADMIN API ---
+app.post('/api/admin/check-session', (req, res) => {
+    const { sessionToken } = req.body;
+    if (adminSessions[sessionToken]) {
+        res.json({ loggedIn: true });
+    } else {
+        res.json({ loggedIn: false });
+    }
+});
+
+app.post('/api/admin/login', (req, res) => {
+    const { password } = req.body;
+    if (password === ADMIN_PASSWORD) {
+        const sessionToken = Date.now().toString() + Math.random().toString();
+        adminSessions[sessionToken] = true;
+        res.json({ success: true, sessionToken: sessionToken });
+    } else {
+        res.status(401).json({ success: false });
+    }
+});
+
+app.post('/api/admin/players', (req, res) => {
+    const { password, sessionToken } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+    
+    const playerCount = getPlayerCount();
+    const goalieCount = getGoalieCount();
+    
+    res.json({ 
+        playerSpots, 
+        playerCount,
+        goalieCount,
+        maxGoalies: MAX_GOALIES,
+        totalPlayers: players.length,
+        players, 
+        waitlist, 
+        location: gameLocation, 
+        time: gameTime,
+        date: gameDate,
+        rosterReleased, 
+        currentWeekData, 
+        playerSignupCode, 
+        requirePlayerCode 
+    });
+});
+
+app.post('/api/admin/settings', (req, res) => {
+    const { password, sessionToken } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+    
+    res.json({
+        code: playerSignupCode,
+        requireCode: requirePlayerCode,
+        isLockedWindow: shouldBeLocked(),
+        manualOverride: manualOverride,
+        location: gameLocation,
+        time: gameTime,
+        date: gameDate,
+        rosterReleased
+    });
+});
+
+app.post('/api/admin/update-details', (req, res) => {
+    const { password, sessionToken, location, time, date } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+    
+    if (location && location.trim().length > 0) {
+        gameLocation = location.trim();
+    }
+    if (time && time.trim().length > 0) {
+        gameTime = time.trim();
+    }
+    if (date && date.trim().length > 0) {
+        gameDate = date.trim();
+    }
+    
+    saveData();
+    
+    res.json({ 
+        success: true, 
+        location: gameLocation,
+        time: gameTime,
+        date: gameDate,
+        formattedDate: formatGameDate(gameDate)
+    });
+});
+
+app.post('/api/admin/update-code', (req, res) => {
+    const { password, sessionToken, newCode } = req.body;
+    
+    if (!adminSessions[sessionToken]) {
+        return res.status(401).json({ error: "Unauthorized - invalid session" });
+    }
+    
+    if (!newCode || !/^\d{4}$/.test(newCode)) {
+        return res.status(400).json({ error: "Code must be exactly 4 digits" });
+    }
+    
+    playerSignupCode = newCode;
+    saveData();
+    
+    console.log('Code updated to:', playerSignupCode);
+    
+    res.json({ 
+        success: true, 
+        code: playerSignupCode, 
+        requireCode: requirePlayerCode 
+    });
+});
+
+app.post('/api/admin/toggle-code', (req, res) => {
+    const { password, sessionToken } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+    
+    requirePlayerCode = !requirePlayerCode;
+    manualOverride = true;
+    saveData();
+    
+    res.json({ 
+        success: true, 
+        requireCode: requirePlayerCode,
+        manualOverride: manualOverride,
+        code: playerSignupCode 
+    });
+});
+
+app.post('/api/admin/reset-schedule', (req, res) => {
+    const { password, sessionToken } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+    
+    manualOverride = false;
+    checkAutoLock();
+    saveData();
+    
+    res.json({ 
+        success: true, 
+        requireCode: requirePlayerCode,
+        manualOverride: manualOverride
+    });
+});
+
+app.post('/api/admin/promote-waitlist', async (req, res) => {
+    const { password, sessionToken, waitlistId } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+
+    const index = waitlist.findIndex(p => p.id === waitlistId);
+    if (index === -1) {
+        return res.status(404).json({ error: "Player not found in waitlist" });
+    }
+
+    const player = waitlist.splice(index, 1)[0];
+    
+    const newPlayer = {
+        id: player.id,
+        firstName: player.firstName,
+        lastName: player.lastName,
+        phone: player.phone,
+        paymentMethod: player.paymentMethod,
+        paid: false,
+        rating: parseInt(player.rating) || 5,
+        isGoalie: player.isGoalie,
+        team: null
+    };
+    
+    try {
+        await pool.query(
+            `INSERT INTO players (id, first_name, last_name, phone, payment_method, paid, rating, is_goalie, team)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [newPlayer.id, newPlayer.firstName, newPlayer.lastName, newPlayer.phone,
+             newPlayer.paymentMethod, newPlayer.paid, newPlayer.rating, newPlayer.isGoalie, null]
+        );
+        players.push(newPlayer);
+        
+        if (!player.isGoalie && playerSpots > 0) {
+            playerSpots--;
+        }
+        
+        await saveData();
+    } catch (err) {
+        console.error('Error promoting player:', err);
+        return res.status(500).json({ error: "Database error" });
+    }
+
+    res.json({ 
+        success: true, 
+        player: newPlayer,
+        spots: playerSpots,
+        override: playerSpots <= 0 && !player.isGoalie
+    });
+});
+
+app.post('/api/admin/remove-waitlist', async (req, res) => {
+    const { password, sessionToken, waitlistId } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+
+    const index = waitlist.findIndex(p => p.id === waitlistId);
+    if (index === -1) {
+        return res.status(404).json({ error: "Player not found in waitlist" });
+    }
+
+    const player = waitlist.splice(index, 1)[0];
+    
+    try {
+        await pool.query('DELETE FROM waitlist WHERE id = $1', [player.id]);
+    } catch (err) {
+        console.error('Error removing from waitlist:', err);
+    }
+    
+    saveData();
+    res.json({ success: true });
+});
+
+app.post('/api/admin/add-player', async (req, res) => {
+    const { password, sessionToken, firstName, lastName, phone, paymentMethod, rating, isGoalie, toWaitlist } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+
+    if (!firstName || !lastName || !phone || !rating) {
+        return res.status(400).json({ error: "First name, last name, phone, and rating required" });
+    }
+
+    if (!validatePhoneNumber(phone)) {
+        return res.status(400).json({ error: "Invalid phone number format" });
+    }
+
+    const formattedPhone = formatPhoneNumber(phone);
+    const ratingNum = parseInt(rating) || 5;
+    const isGoalieBool = isGoalie || false;
+
+    if (toWaitlist) {
+        const waitlistPlayer = {
+            id: Date.now(),
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phone: formattedPhone,
+            paymentMethod: paymentMethod || 'Cash',
+            rating: ratingNum,
+            isGoalie: isGoalieBool,
+            joinedAt: new Date()
+        };
+        
+        try {
+            await pool.query(
+                `INSERT INTO waitlist (id, first_name, last_name, phone, payment_method, rating, is_goalie)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [waitlistPlayer.id, waitlistPlayer.firstName, waitlistPlayer.lastName,
+                 waitlistPlayer.phone, waitlistPlayer.paymentMethod, waitlistPlayer.rating, isGoalieBool]
+            );
+            waitlist.push(waitlistPlayer);
+        } catch (err) {
+            console.error('Error adding to waitlist:', err);
+            return res.status(500).json({ error: "Database error" });
+        }
+        
+        saveData();
+        res.json({ success: true, player: waitlistPlayer, inWaitlist: true });
+    } else {
+        if (isGoalieBool && !isGoalieSpotsAvailable()) {
+            return res.status(400).json({ error: "Goalie spots are full (maximum 2)." });
+        }
+        
+        const newPlayer = {
+            id: Date.now(),
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phone: formattedPhone,
+            paymentMethod: paymentMethod || 'Cash',
+            paid: isGoalieBool ? true : false,
+            rating: ratingNum,
+            isGoalie: isGoalieBool,
+            team: null
+        };
+        
+        try {
+            await pool.query(
+                `INSERT INTO players (id, first_name, last_name, phone, payment_method, paid, rating, is_goalie, team)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                [newPlayer.id, newPlayer.firstName, newPlayer.lastName, newPlayer.phone,
+                 newPlayer.paymentMethod, newPlayer.paid, newPlayer.rating, isGoalieBool, null]
+            );
+            players.push(newPlayer);
+            
+            if (!isGoalieBool && playerSpots > 0) {
+                playerSpots--;
+            }
+            
+            await saveData();
+        } catch (err) {
+            console.error('Error adding player:', err);
+            return res.status(500).json({ error: "Database error" });
+        }
+        
+        res.json({ success: true, player: newPlayer, inWaitlist: false });
+    }
+});
+
+app.post('/api/admin/remove-player', async (req, res) => {
+    const { password, sessionToken, playerId } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+
+    const index = players.findIndex(p => p.id === playerId);
+    if (index === -1) {
+        return res.status(404).json({ error: "Player not found" });
+    }
+
+    const wasGoalie = players[index].isGoalie;
+    const player = players.splice(index, 1)[0];
+    
+    try {
+        await pool.query('DELETE FROM players WHERE id = $1', [player.id]);
+        
+        if (!wasGoalie) {
+            playerSpots++;
+        }
+        
+        await saveData();
+    } catch (err) {
+        console.error('Error removing player:', err);
+        return res.status(500).json({ error: "Database error" });
+    }
+
+    res.json({ success: true, spots: playerSpots });
+});
+
+app.post('/api/admin/update-spots', (req, res) => {
+    const { password, sessionToken, newSpots } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+    
+    const spotCount = parseInt(newSpots);
+    if (isNaN(spotCount) || spotCount < 0 || spotCount > 30) {
+        return res.status(400).json({ error: "Invalid spot count (0-30 allowed)" });
+    }
+    
+    playerSpots = spotCount;
+    saveData();
+    res.json({ success: true, spots: playerSpots });
+});
+
+app.post('/api/admin/toggle-paid', async (req, res) => {
+    const { password, sessionToken, playerId } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+
+    const player = players.find(p => p.id === playerId);
+    if (player) {
+        player.paid = !player.paid;
+        
+        try {
+            await pool.query('UPDATE players SET paid = $1 WHERE id = $2', [player.paid, player.id]);
+        } catch (err) {
+            console.error('Error toggling paid:', err);
+        }
+        
+        saveData();
+        res.json({ success: true, player });
+    } else {
+        res.status(404).send("Player not found");
+    }
+});
+
+app.post('/api/admin/release-roster', async (req, res) => {
+    const { password, sessionToken } = req.body;
+    
+    console.log('Release roster requested');
+    
+    if (!adminSessions[sessionToken]) {
+        console.log('Unauthorized: Invalid session');
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+    
+    if (players.length === 0) {
+        console.log('No players to release');
+        return res.status(400).json({ error: "No players registered yet" });
+    }
+    
+    try {
+        const etTime = getCurrentETTime();
+        const { week, year } = getWeekNumber(etTime);
+        
+        console.log('Generating teams...');
+        const teams = generateFairTeams();
+        rosterReleased = true;
+        
+        currentWeekData = {
+            weekNumber: week,
+            year: year,
+            releaseDate: new Date().toISOString(),
+            whiteTeam: teams.whiteTeam,
+            darkTeam: teams.darkTeam
+        };
+        
+        // Update players in database with team assignments
+        for (const player of players) {
+            await pool.query('UPDATE players SET team = $1 WHERE id = $2', [player.team, player.id]);
+        }
+        
+        await saveWeekHistory(year, week, teams.whiteTeam, teams.darkTeam);
+        await saveData();
+        
+        console.log('Roster released successfully');
+        
+        res.json({ 
+            success: true, 
+            message: "Roster released and saved to history",
+            whiteTeam: teams.whiteTeam,
+            darkTeam: teams.darkTeam,
+            whiteRating: teams.whiteRating.toFixed(1),
+            darkRating: teams.darkRating.toFixed(1)
+        });
+    } catch (error) {
+        console.error('Error in release roster:', error);
+        res.status(500).json({ error: "Server error: " + error.message });
+    }
+});
+
+app.post('/api/admin/manual-reset', async (req, res) => {
+    const { password, sessionToken } = req.body;
+    if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        return res.status(401).send("Unauthorized");
+    }
+    
+    if (rosterReleased && currentWeekData.weekNumber) {
+        await saveWeekHistory(
+            currentWeekData.year,
+            currentWeekData.weekNumber,
+            currentWeekData.whiteTeam,
+            currentWeekData.darkTeam
+        );
+    }
+    
+    const etTime = getCurrentETTime();
+    const { week, year } = getWeekNumber(etTime);
+    
+    playerSpots = 20;
+    players = [];
+    waitlist = [];
+    rosterReleased = false;
+    lastResetWeek = week;
+    gameDate = calculateNextFriday();
+    playerSignupCode = generateRandomCode();
+    currentWeekData = {
+        weekNumber: week,
+        year: year,
+        releaseDate: null,
+        whiteTeam: [],
+        darkTeam: []
+    };
+    
+    try {
+        await pool.query('DELETE FROM players');
+        await pool.query('DELETE FROM waitlist');
+        await saveData();
+    } catch (err) {
+        console.error('Error resetting:', err);
+    }
+    
+    res.json({ success: true, message: "Manual reset completed", newCode: playerSignupCode });
+});
+
+// Initialize database and start server
+initDatabase().then(() => {
+    app.listen(PORT, () => {
+        console.log(`Phan's Friday Hockey server running on port ${PORT}`);
+        console.log(`Location: ${gameLocation}`);
+        console.log(`Time: ${gameTime}`);
+        console.log(`Date: ${gameDate}`);
+        console.log(`Current signup code: ${playerSignupCode}`);
+        console.log(`Current players registered: ${players.length}`);
+    });
+}).catch(err => {
+    console.error('Failed to initialize database, starting with file fallback:', err);
+    loadDataFromFile();
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT} (file fallback mode)`);
+    });
+});
