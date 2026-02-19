@@ -427,22 +427,51 @@
             font-weight: bold;
         }
 
-        /* Lock schedule notice */
+        /* Lock schedule notice - ENHANCED VERSION */
         .lock-notice {
-            background: linear-gradient(135deg, #3a1a1a, #4d2d2d);
-            border: 2px solid #ff4444;
+            background: linear-gradient(135deg, #4a1a1a, #5d2d2d);
+            border: 3px solid #ff4444;
             border-radius: 10px;
-            padding: 15px;
-            margin: 15px 0;
+            padding: 20px;
+            margin: 20px 0;
             text-align: center;
-            color: #ff4444;
-            font-size: 0.9rem;
+            color: #ffaaaa;
+            font-size: 1rem;
+            box-shadow: 0 0 20px rgba(255, 68, 68, 0.3);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 20px rgba(255, 68, 68, 0.3); }
+            50% { box-shadow: 0 0 30px rgba(255, 68, 68, 0.5); }
         }
 
         .lock-notice strong {
             display: block;
-            margin-bottom: 5px;
+            margin-bottom: 10px;
+            font-size: 1.3rem;
+            color: #ff4444;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .lock-notice .open-time {
+            color: #4CAF50;
+            font-weight: bold;
+            display: block;
+            margin-top: 12px;
             font-size: 1.1rem;
+            background: rgba(76, 175, 80, 0.1);
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #4CAF50;
+        }
+
+        .lock-notice .no-code-note {
+            color: #888;
+            font-size: 0.9rem;
+            display: block;
+            margin-top: 8px;
         }
 
         @media (max-width: 600px) {
@@ -454,6 +483,8 @@
             .payment-options > div {
                 flex: 1 1 100%;
             }
+            .lock-notice { font-size: 0.9rem; padding: 15px; }
+            .lock-notice strong { font-size: 1.1rem; }
         }
     </style>
 </head>
@@ -500,14 +531,14 @@
                 </div>
             </div>
 
-            <!-- Lock Schedule Notice - Shows when in locked window -->
+            <!-- Lock Schedule Notice - ENHANCED VERSION -->
             <div class="lock-notice" id="lockNotice" style="display:none;">
                 <strong>🔒 Signup Temporarily Locked</strong>
-                Signup is locked from Saturday 12:00 AM to Monday 6:00 PM ET<br>
-                <span style="color: #4CAF50; font-weight: bold; display: block; margin-top: 8px;">
+                Signup is locked from Saturday 12:00 AM to Monday 6:00 PM ET
+                <span class="open-time">
                     ✅ Signup opens to all players Monday at 6:00 PM ET
                 </span>
-                <span style="color: #888; font-size: 0.85rem; display: block; margin-top: 5px;">
+                <span class="no-code-note">
                     (No code required after 6:00 PM ET Monday)
                 </span>
             </div>
@@ -813,12 +844,16 @@
                 
                 codeRequired = data.requireCode;
                 
-                // Handle lock schedule notice
+                // Handle lock schedule notice - FORCE SHOW when locked
                 const lockNotice = document.getElementById('lockNotice');
-                if (isLockedWindow) {
+                console.log('Lock status check:', { isLockedWindow, codeRequired, requireCode: data.requireCode });
+                
+                if (isLockedWindow || (codeRequired && !data.rosterReleased)) {
                     lockNotice.style.display = 'block';
+                    console.log('Lock notice SHOWN');
                 } else {
                     lockNotice.style.display = 'none';
+                    console.log('Lock notice hidden');
                 }
                 
                 // Handle code requirement display
