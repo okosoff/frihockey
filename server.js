@@ -65,35 +65,30 @@ const GAME_RULES = [
 // --- FIXED TIME FUNCTIONS ---
 
 function getCurrentETTime() {
-    // FIXED: Use Intl.DateTimeFormat for reliable timezone conversion
-    // This works correctly even with manually changed system time
+    // Get current time in ET timezone properly
     const now = new Date();
     
-    const formatter = new Intl.DateTimeFormat('en-US', {
+    // Convert to ET timezone string
+    const etString = now.toLocaleString('en-US', {
         timeZone: 'America/New_York',
         year: 'numeric',
-        month: 'numeric',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: 'numeric',
-        second: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
         hour12: false
     });
     
-    const parts = formatter.formatToParts(now);
-    const getPart = (type) => {
-        const part = parts.find(p => p.type === type);
-        return part ? part.value : '0';
-    };
+    // Parse the ET string into components
+    const [datePart, timePart] = etString.split(', ');
+    const [month, day, year] = datePart.split('/').map(Number);
+    const [hour, minute, second] = timePart.split(':').map(Number);
     
-    const year = parseInt(getPart('year'));
-    const month = parseInt(getPart('month')) - 1; // 0-indexed
-    const day = parseInt(getPart('day'));
-    const hour = parseInt(getPart('hour'));
-    const minute = parseInt(getPart('minute'));
-    const second = parseInt(getPart('second'));
+    // Create date object from ET components (treat as local for comparison)
+    const etDate = new Date(year, month - 1, day, hour, minute, second);
     
-    return new Date(year, month, day, hour, minute, second);
+    return etDate;
 }
 
 function getWeekNumber(date) {
@@ -109,25 +104,30 @@ function getWeekNumber(date) {
 
 function shouldBeLocked() {
     const etTime = getCurrentETTime();
-    const day = etTime.getDay();
+    const day = etTime.getDay(); // 0 = Sunday, 1 = Monday, 6 = Saturday
     const hour = etTime.getHours();
     
-    // DEBUG: Log current ET time for troubleshooting
     console.log(`[AUTO-LOCK CHECK] ET Time: ${etTime.toLocaleString('en-US', {weekday: 'short', hour: '2-digit', minute: '2-digit'})}, Day: ${day}, Hour: ${hour}`);
     
+    // Saturday (6) - all day locked (12:00 AM to 11:59 PM)
     if (day === 6) {
         console.log('[AUTO-LOCK] Saturday detected - SHOULD LOCK');
-        return true;  // Saturday all day
-    }
-    if (day === 0) {
-        console.log('[AUTO-LOCK] Sunday detected - SHOULD LOCK');
-        return true;  // Sunday all day
-    }
-    if (day === 1 && hour < 18) {
-        console.log('[AUTO-LOCK] Monday before 6pm detected - SHOULD LOCK');
-        return true;  // Monday before 6 PM
+        return true;
     }
     
+    // Sunday (0) - all day locked
+    if (day === 0) {
+        console.log('[AUTO-LOCK] Sunday detected - SHOULD LOCK');
+        return true;
+    }
+    
+    // Monday (1) - locked until 6:00 PM (18:00)
+    if (day === 1 && hour < 18) {
+        console.log('[AUTO-LOCK] Monday before 6pm detected - SHOULD LOCK');
+        return true;
+    }
+    
+    // All other times (Monday 6pm through Friday 11:59pm) - OPEN
     console.log('[AUTO-LOCK] Outside lock window - SHOULD OPEN');
     return false;
 }
