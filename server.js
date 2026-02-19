@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { Pool } = require('pg'); // Add this
+const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -62,11 +62,161 @@ const GAME_RULES = [
     "Have fun!"
 ];
 
+// --- FIXED TIME FUNCTIONS ---
+
+function getCurrentETTime() {
+    // FIXED: Use Intl.DateTimeFormat for reliable timezone conversion
+    // This works correctly even with manually changed system time
+    const now = new Date();
+    
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: false
+    });
+    
+    const parts = formatter.formatToParts(now);
+    const getPart = (type) => {
+        const part = parts.find(p => p.type === type);
+        return part ? part.value : '0';
+    };
+    
+    const year = parseInt(getPart('year'));
+    const month = parseInt(getPart('month')) - 1; // 0-indexed
+    const day = parseInt(getPart('day'));
+    const hour = parseInt(getPart('hour'));
+    const minute = parseInt(getPart('minute'));
+    const second = parseInt(getPart('second'));
+    
+    return new Date(year, month, day, hour, minute, second);
+}
+
+function getWeekNumber(date) {
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    return {
+        week: Math.ceil((((d - yearStart) / 86400000) + 1) / 7),
+        year: d.getUTCFullYear()
+    };
+}
+
+function shouldBeLocked() {
+    const etTime = getCurrentETTime();
+    const day = etTime.getDay();
+    const hour = etTime.getHours();
+    
+    // DEBUG: Log current ET time for troubleshooting
+    console.log(`[AUTO-LOCK CHECK] ET Time: ${etTime.toLocaleString('en-US', {weekday: 'short', hour: '2-digit', minute: '2-digit'})}, Day: ${day}, Hour: ${hour}`);
+    
+    if (day === 6) {
+        console.log('[AUTO-LOCK] Saturday detected - SHOULD LOCK');
+        return true;  // Saturday all day
+    }
+    if (day === 0) {
+        console.log('[AUTO-LOCK] Sunday detected - SHOULD LOCK');
+        return true;  // Sunday all day
+    }
+    if (day === 1 && hour < 18) {
+        console.log('[AUTO-LOCK] Monday before 6pm detected - SHOULD LOCK');
+        return true;  // Monday before 6 PM
+    }
+    
+    console.log('[AUTO-LOCK] Outside lock window - SHOULD OPEN');
+    return false;
+}
+
+// FIXED: Enhanced checkAutoLock with better logging and immediate response
+function checkAutoLock() {
+    console.log('[AUTO-LOCK] Running check at:', new Date().toISOString());
+    
+    const shouldLock = shouldBeLocked();
+    
+    if (shouldLock) {
+        // CRITICAL FIX: Always enforce lock during locked window (Sat 12am - Mon 6pm ET)
+        if (manualOverride) {
+            manualOverride = false;
+            console.log("[AUTO-LOCK] Auto-schedule restored - entering mandatory lock window (Sat-Mon)");
+        }
+        if (!requirePlayerCode) {
+            requirePlayerCode = true;
+            console.log("[AUTO-LOCK] 🔒 LOCKED: Saturday 12am to Monday 6pm ET window active");
+        } else {
+            console.log("[AUTO-LOCK] Already locked, no change needed");
+        }
+        saveData();
+    } else {
+        // Outside locked window (Mon 6pm - Sat 12am) - respect manual override
+        if (!manualOverride && requirePlayerCode) {
+            requirePlayerCode = false;
+            console.log("[AUTO-LOCK] ✅ OPEN: Monday 6pm ET reached - signup opened");
+            saveData();
+        } else if (manualOverride) {
+            console.log("[AUTO-LOCK] Manual override active - keeping current state");
+        } else {
+            console.log("[AUTO-LOCK] Already open, no change needed");
+        }
+    }
+    
+    return { requirePlayerCode, manualOverride, isLockedWindow: shouldLock };
+}
+
+function checkWeeklyReset() {
+    const etTime = getCurrentETTime();
+    const { week: currentWeek, year: currentYear } = getWeekNumber(etTime);
+    const day = etTime.getDay();
+    
+    if (day === 5 && (lastResetWeek !== currentWeek || currentWeekData.year !== currentYear)) {
+        console.log(`[WEEKLY RESET] Triggered for week ${currentWeek}, ${currentYear}`);
+        
+        if (rosterReleased && currentWeekData.weekNumber && 
+            (currentWeekData.whiteTeam.length > 0 || currentWeekData.darkTeam.length > 0)) {
+            saveWeekHistory(
+                currentWeekData.year,
+                currentWeekData.weekNumber,
+                currentWeekData.whiteTeam,
+                currentWeekData.darkTeam
+            );
+        }
+        
+        playerSpots = 20;
+        players = [];
+        waitlist = [];
+        rosterReleased = false;
+        lastResetWeek = currentWeek;
+        gameDate = calculateNextFriday();
+        currentWeekData = {
+            weekNumber: currentWeek,
+            year: currentYear,
+            releaseDate: null,
+            whiteTeam: [],
+            darkTeam: []
+        };
+        
+        saveData();
+        console.log("[WEEKLY RESET] New week started - registration reset");
+    }
+}
+
+// FIXED: More frequent checks (5 seconds) for testing, 30 seconds for production
+const CHECK_INTERVAL = process.env.NODE_ENV === 'production' ? 30000 : 5000;
+
+setInterval(() => {
+    checkAutoLock();
+    checkWeeklyReset();
+    saveData();
+}, CHECK_INTERVAL);
+
 // --- DATABASE FUNCTIONS ---
 
 async function initDatabase() {
     try {
-        // Create tables if they don't exist
         await pool.query(`
             CREATE TABLE IF NOT EXISTS settings (
                 key VARCHAR(50) PRIMARY KEY,
@@ -123,14 +273,12 @@ async function initDatabase() {
         await loadDataFromDB();
     } catch (err) {
         console.error('Database initialization error:', err);
-        // Fall back to file-based if DB fails
         loadDataFromFile();
     }
 }
 
 async function loadDataFromDB() {
     try {
-        // Load settings
         const settingsRes = await pool.query('SELECT * FROM settings');
         const settings = {};
         settingsRes.rows.forEach(row => {
@@ -148,7 +296,6 @@ async function loadDataFromDB() {
         if (settings.rosterReleased !== undefined) rosterReleased = settings.rosterReleased;
         if (settings.currentWeekData) currentWeekData = settings.currentWeekData;
         
-        // Load players
         const playersRes = await pool.query('SELECT * FROM players ORDER BY registered_at');
         players = playersRes.rows.map(p => ({
             id: p.id,
@@ -164,7 +311,6 @@ async function loadDataFromDB() {
             rulesAgreed: p.rules_agreed
         }));
         
-        // Load waitlist
         const waitlistRes = await pool.query('SELECT * FROM waitlist ORDER BY joined_at');
         waitlist = waitlistRes.rows.map(p => ({
             id: p.id,
@@ -212,7 +358,7 @@ async function saveData() {
     }
 }
 
-// --- FALLBACK FILE FUNCTIONS (if DB fails) ---
+// --- FALLBACK FILE FUNCTIONS ---
 const DATA_FILE = './data.json';
 
 function generateRandomCode() {
@@ -292,108 +438,8 @@ function formatGameDate(dateString) {
     return date.toLocaleDateString('en-US', options);
 }
 
-// --- TIME FUNCTIONS ---
-function getCurrentETTime() {
-    const now = new Date();
-    const etTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-    return etTime;
-}
-
-function getWeekNumber(date) {
-    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-    const dayNum = d.getUTCDay() || 7;
-    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return {
-        week: Math.ceil((((d - yearStart) / 86400000) + 1) / 7),
-        year: d.getUTCFullYear()
-    };
-}
-
-function shouldBeLocked() {
-    const etTime = getCurrentETTime();
-    const day = etTime.getDay();
-    const hour = etTime.getHours();
-    
-    if (day === 6) return true;  // Saturday all day
-    if (day === 0) return true;  // Sunday all day
-    if (day === 1 && hour < 18) return true;  // Monday before 6 PM
-    return false;
-}
-
-// FIXED: checkAutoLock now properly enforces lock window regardless of manualOverride
-function checkAutoLock() {
-    const shouldLock = shouldBeLocked();
-    
-    if (shouldLock) {
-        // CRITICAL FIX: Always enforce lock during locked window (Sat 12am - Mon 6pm ET)
-        // Reset manual override when entering lock window to ensure schedule works
-        if (manualOverride) {
-            manualOverride = false;
-            console.log("Auto-schedule restored - entering mandatory lock window (Sat-Mon)");
-        }
-        if (!requirePlayerCode) {
-            requirePlayerCode = true;
-            console.log("Auto-locked: Saturday 12am to Monday 6pm ET window active");
-        }
-        saveData();
-    } else {
-        // Outside locked window (Mon 6pm - Sat 12am) - respect manual override
-        if (!manualOverride && requirePlayerCode) {
-            requirePlayerCode = false;
-            console.log("Auto-unlocked: Monday 6pm ET reached");
-            saveData();
-        }
-    }
-}
-
-function checkWeeklyReset() {
-    const etTime = getCurrentETTime();
-    const { week: currentWeek, year: currentYear } = getWeekNumber(etTime);
-    const day = etTime.getDay();
-    
-    if (day === 5 && (lastResetWeek !== currentWeek || currentWeekData.year !== currentYear)) {
-        console.log(`Weekly reset triggered for week ${currentWeek}, ${currentYear}`);
-        
-        if (rosterReleased && currentWeekData.weekNumber && 
-            (currentWeekData.whiteTeam.length > 0 || currentWeekData.darkTeam.length > 0)) {
-            saveWeekHistory(
-                currentWeekData.year,
-                currentWeekData.weekNumber,
-                currentWeekData.whiteTeam,
-                currentWeekData.darkTeam
-            );
-        }
-        
-        playerSpots = 20;
-        players = [];
-        waitlist = [];
-        rosterReleased = false;
-        lastResetWeek = currentWeek;
-        gameDate = calculateNextFriday();
-        currentWeekData = {
-            weekNumber: currentWeek,
-            year: currentYear,
-            releaseDate: null,
-            whiteTeam: [],
-            darkTeam: []
-        };
-        
-        saveData();
-        console.log("New week started - registration reset");
-    }
-}
-
-setInterval(() => {
-    checkAutoLock();
-    checkWeeklyReset();
-    saveData();
-}, 60000);
-
-checkAutoLock();
-checkWeeklyReset();
-
 // --- HELPER FUNCTIONS ---
+
 function validatePhoneNumber(phone) {
     const cleaned = phone.replace(/\D/g, '');
     return cleaned.length === 10;
@@ -485,7 +531,6 @@ function generateFairTeams() {
     return { whiteTeam, darkTeam, whiteRating, darkRating };
 }
 
-// Save weekly history to database
 async function saveWeekHistory(year, weekNumber, whiteTeam, darkTeam) {
     try {
         const whiteAvg = (whiteTeam.reduce((sum, p) => sum + (parseInt(p.rating) || 0), 0) / whiteTeam.length).toFixed(1);
@@ -514,7 +559,6 @@ async function saveWeekHistory(year, weekNumber, whiteTeam, darkTeam) {
     }
 }
 
-// Get all historical weeks from DB
 async function getHistoryList() {
     try {
         const res = await pool.query(
@@ -531,7 +575,6 @@ async function getHistoryList() {
     }
 }
 
-// Get specific week history from DB
 async function getWeekHistory(year, weekNumber) {
     try {
         const res = await pool.query(
@@ -562,6 +605,38 @@ async function getWeekHistory(year, weekNumber) {
 }
 
 // --- ROUTES ---
+
+// DEBUG ROUTES - Remove in production
+app.get('/api/debug-time', (req, res) => {
+    const now = new Date();
+    const etTime = getCurrentETTime();
+    const shouldLock = shouldBeLocked();
+    
+    res.json({
+        systemTime: now.toISOString(),
+        systemTimeLocal: now.toString(),
+        systemDay: now.getDay(),
+        systemHour: now.getHours(),
+        etTime: etTime.toISOString(),
+        etTimeLocal: etTime.toString(),
+        etDay: etTime.getDay(),
+        etHour: etTime.getHours(),
+        shouldBeLocked: shouldLock,
+        requirePlayerCode: requirePlayerCode,
+        manualOverride: manualOverride
+    });
+});
+
+app.get('/api/force-check', (req, res) => {
+    const result = checkAutoLock();
+    res.json({ 
+        message: 'Lock check forced',
+        ...result,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Regular routes
 app.get('/admin', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
@@ -584,7 +659,8 @@ app.get('/rules', (req, res) => {
 
 // --- PUBLIC API ---
 app.get('/api/status', (req, res) => {
-    checkAutoLock();
+    // FIXED: Always run checkAutoLock to get current state
+    const lockStatus = checkAutoLock();
     const etTime = getCurrentETTime();
     const { week, year } = getWeekNumber(etTime);
     
@@ -600,7 +676,7 @@ app.get('/api/status', (req, res) => {
         isFull: playerSpots === 0,
         waitlistCount: waitlist.length,
         requireCode: requirePlayerCode,
-        isLockedWindow: shouldBeLocked(),
+        isLockedWindow: lockStatus.isLockedWindow,
         location: gameLocation,
         time: gameTime,
         date: gameDate,
@@ -889,10 +965,13 @@ app.post('/api/admin/settings', (req, res) => {
         return res.status(401).send("Unauthorized");
     }
     
+    // FIXED: Run check to get current lock status
+    const lockStatus = checkAutoLock();
+    
     res.json({
         code: playerSignupCode,
         requireCode: requirePlayerCode,
-        isLockedWindow: shouldBeLocked(),
+        isLockedWindow: lockStatus.isLockedWindow,
         manualOverride: manualOverride,
         location: gameLocation,
         time: gameTime,
@@ -1246,7 +1325,6 @@ app.post('/api/admin/release-roster', async (req, res) => {
             darkTeam: teams.darkTeam
         };
         
-        // Update players in database with team assignments
         for (const player of players) {
             await pool.query('UPDATE players SET team = $1 WHERE id = $2', [player.team, player.id]);
         }
@@ -1316,6 +1394,11 @@ app.post('/api/admin/manual-reset', async (req, res) => {
 
 // Initialize database and start server
 initDatabase().then(() => {
+    // FIXED: Run initial checks immediately on startup
+    console.log('[STARTUP] Running initial auto-lock check...');
+    checkAutoLock();
+    checkWeeklyReset();
+    
     app.listen(PORT, () => {
         console.log(`Phan's Friday Hockey server running on port ${PORT}`);
         console.log(`Location: ${gameLocation}`);
@@ -1323,10 +1406,18 @@ initDatabase().then(() => {
         console.log(`Date: ${gameDate}`);
         console.log(`Current signup code: ${playerSignupCode}`);
         console.log(`Current players registered: ${players.length}`);
+        console.log(`Auto-lock status: ${requirePlayerCode ? 'LOCKED' : 'OPEN'}`);
+        console.log(`Manual override: ${manualOverride}`);
     });
 }).catch(err => {
     console.error('Failed to initialize database, starting with file fallback:', err);
     loadDataFromFile();
+    
+    // FIXED: Run checks even in fallback mode
+    console.log('[STARTUP] Running initial auto-lock check (fallback mode)...');
+    checkAutoLock();
+    checkWeeklyReset();
+    
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT} (file fallback mode)`);
     });
