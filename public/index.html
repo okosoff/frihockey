@@ -486,7 +486,79 @@
             .lock-notice { font-size: 0.9rem; padding: 15px; }
             .lock-notice strong { font-size: 1.1rem; }
         }
-    </style>
+    
+        /* Registered Players Section */
+        .registered-players-section {
+            background: linear-gradient(135deg, #1a2a1a, #2d3d2d);
+            border: 2px solid #4CAF50;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .players-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .player-card {
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-left: 3px solid var(--accent);
+        }
+
+        .player-card.goalie-card {
+            border-left-color: #ff6b00;
+            background: rgba(255, 107, 0, 0.1);
+        }
+
+        .player-avatar {
+            width: 40px;
+            height: 40px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .player-card.goalie-card .player-avatar {
+            background: #ff6b00;
+        }
+
+        .player-info-simple {
+            flex: 1;
+        }
+
+        .player-name-simple {
+            font-weight: 500;
+            font-size: 0.95rem;
+        }
+
+        .goalie-label {
+            color: #ff6b00;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+
+        @media (max-width: 600px) {
+            .players-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+</style>
+<base target="_blank">
 </head>
 <body>
 
@@ -522,6 +594,18 @@
                 </div>
             </div>
         </div>
+
+
+        <!-- Registered Players List -->
+        <div class="registered-players-section" id="registeredPlayersSection">
+            <h3 style="text-align: center; color: var(--accent); margin: 20px 0 15px 0; text-transform: uppercase; letter-spacing: 1px;">
+                🏒 Registered Players (<span id="registeredCount">0</span>)
+            </h3>
+            <div class="players-grid" id="playersGrid">
+                <!-- Players will be loaded here -->
+            </div>
+        </div>
+
 
         <div id="registrationArea">
             <div class="spots-container">
@@ -855,6 +939,10 @@
                     lockNotice.style.display = 'none';
                     console.log('Lock notice hidden');
                 }
+
+                // Load registered players list
+                await loadRegisteredPlayers();
+
                 
                 // Handle code requirement display
                 const codeTitle = document.getElementById('codeTitle');
@@ -889,6 +977,73 @@
             checkStatus().catch(err => console.error("Status check failed:", err));
         }, 10000);
         
+        
+        async function loadRegisteredPlayers() {
+            try {
+                const res = await fetch(`${API_URL}/api/admin/players`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: 'public_view' })
+                });
+
+                if (!res.ok) {
+                    // If unauthorized, try the public status endpoint which includes players
+                    const statusRes = await fetch(`${API_URL}/api/status`);
+                    const statusData = await statusRes.json();
+
+                    // Create a simple players list from status data if available
+                    if (statusData.players) {
+                        renderPlayers(statusData.players);
+                    }
+                    return;
+                }
+
+                const data = await res.json();
+                renderPlayers(data.players);
+            } catch (err) {
+                console.error("Error loading players:", err);
+            }
+        }
+
+        function renderPlayers(players) {
+            const grid = document.getElementById('playersGrid');
+            const countSpan = document.getElementById('registeredCount');
+
+            if (!players || players.length === 0) {
+                grid.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No players registered yet</div>';
+                countSpan.innerText = '0';
+                return;
+            }
+
+            // Sort players alphabetically by last name, then first name
+            const sortedPlayers = players.sort((a, b) => {
+                const nameA = (a.lastName + ' ' + a.firstName).toLowerCase();
+                const nameB = (b.lastName + ' ' + b.firstName).toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+
+            countSpan.innerText = sortedPlayers.length;
+
+            grid.innerHTML = '';
+            sortedPlayers.forEach(player => {
+                const card = document.createElement('div');
+                card.className = 'player-card' + (player.isGoalie ? ' goalie-card' : '');
+
+                const initials = (player.firstName[0] + player.lastName[0]).toUpperCase();
+                const goalieLabel = player.isGoalie ? '<div class="goalie-label">GOALIE</div>' : '';
+
+                card.innerHTML = `
+                    <div class="player-avatar">${initials}</div>
+                    <div class="player-info-simple">
+                        <div class="player-name-simple">${player.firstName} ${player.lastName}</div>
+                        ${goalieLabel}
+                    </div>
+                `;
+
+                grid.appendChild(card);
+            });
+        }
+
         // Initial load
         checkStatus();
 
