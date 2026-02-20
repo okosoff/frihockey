@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const cron = require('node-cron');
 const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -167,14 +168,76 @@ function checkAutoLock() {
     return { requirePlayerCode, manualOverride, isLockedWindow: shouldLock };
 }
 
+// --- NEW: AUTO ROSTER RELEASE FUNCTION ---
+async function autoReleaseRoster() {
+    console.log('[AUTO-RELEASE] Checking if roster should be released...');
+    
+    const etTime = getCurrentETTime();
+    const day = etTime.getDay();
+    const hour = etTime.getHours();
+    
+    // Only release on Friday at 6pm if not already released and players exist
+    if (day === 5 && hour === 18 && !rosterReleased && players.length > 0) {
+        console.log('[AUTO-RELEASE] 🏒 Friday 6pm ET - Auto-releasing roster!');
+        
+        try {
+            const { week, year } = getWeekNumber(etTime);
+            
+            console.log('[AUTO-RELEASE] Generating teams...');
+            const teams = generateFairTeams();
+            rosterReleased = true;
+            
+            currentWeekData = {
+                weekNumber: week,
+                year: year,
+                releaseDate: new Date().toISOString(),
+                whiteTeam: teams.whiteTeam,
+                darkTeam: teams.darkTeam
+            };
+            
+            // Lock signup immediately after release
+            requirePlayerCode = true;
+            manualOverride = false; // Ensure auto-lock takes over
+            console.log('[AUTO-RELEASE] 🔒 Signup locked after roster release');
+            
+            // Save team assignments to database
+            for (const player of players) {
+                await pool.query('UPDATE players SET team = $1 WHERE id = $2', [player.team, player.id]);
+            }
+            
+            // Save to history
+            await saveWeekHistory(year, week, teams.whiteTeam, teams.darkTeam);
+            await saveData();
+            
+            console.log(`[AUTO-RELEASE] ✅ Roster released! White: ${teams.whiteTeam.length}, Dark: ${teams.darkTeam.length}`);
+            console.log(`[AUTO-RELEASE] 💾 Saved to history: Week ${week}, ${year}`);
+            
+        } catch (error) {
+            console.error('[AUTO-RELEASE] ❌ Error auto-releasing roster:', error);
+        }
+    } else {
+        if (rosterReleased) {
+            console.log('[AUTO-RELEASE] Roster already released this week');
+        } else if (players.length === 0) {
+            console.log('[AUTO-RELEASE] No players registered, skipping release');
+        } else {
+            console.log(`[AUTO-RELEASE] Not Friday 6pm (Day: ${day}, Hour: ${hour}), skipping`);
+        }
+    }
+}
+
+// --- MODIFIED: Weekly Reset - No new code generation ---
 function checkWeeklyReset() {
     const etTime = getCurrentETTime();
     const { week: currentWeek, year: currentYear } = getWeekNumber(etTime);
-    const day = etTime.getDay();
+    const day = etTime.getDay(); // 5 = Friday, 6 = Saturday
+    const hour = etTime.getHours();
     
-    if (day === 5 && (lastResetWeek !== currentWeek || currentWeekData.year !== currentYear)) {
-        console.log(`[WEEKLY RESET] Triggered for week ${currentWeek}, ${currentYear}`);
+    // Reset at midnight Friday (12am Saturday) - day becomes 6 (Saturday) at hour 0
+    if (day === 6 && hour === 0 && (lastResetWeek !== currentWeek || currentWeekData.year !== currentYear)) {
+        console.log(`[WEEKLY RESET] 🕛 Midnight Friday (12am Saturday) - Resetting for week ${currentWeek}, ${currentYear}`);
         
+        // Save current week to history if roster was released
         if (rosterReleased && currentWeekData.weekNumber && 
             (currentWeekData.whiteTeam.length > 0 || currentWeekData.darkTeam.length > 0)) {
             saveWeekHistory(
@@ -185,12 +248,17 @@ function checkWeeklyReset() {
             );
         }
         
+        // Reset all game data
         playerSpots = 20;
         players = [];
         waitlist = [];
         rosterReleased = false;
         lastResetWeek = currentWeek;
         gameDate = calculateNextFriday();
+        
+        // IMPORTANT: Keep existing signup code - DO NOT generate new one
+        // playerSignupCode stays the same!
+        
         currentWeekData = {
             weekNumber: currentWeek,
             year: currentYear,
@@ -199,8 +267,12 @@ function checkWeeklyReset() {
             darkTeam: []
         };
         
+        // Lock signup after reset (will stay locked until Monday 6pm)
+        requirePlayerCode = true;
+        manualOverride = false;
+        
         saveData();
-        console.log("[WEEKLY RESET] New week started - registration reset");
+        console.log("[WEEKLY RESET] ✅ New week started - registration reset, code kept: " + playerSignupCode);
     }
 }
 
@@ -684,7 +756,14 @@ app.get('/api/status', (req, res) => {
         rosterReleased: rosterReleased,
         currentWeek: week,
         currentYear: year,
-        rules: GAME_RULES
+        rules: GAME_RULES,
+        // Include players list for the signup page
+        players: players.map(p => ({
+            firstName: p.firstName,
+            lastName: p.lastName,
+            isGoalie: p.isGoalie,
+            rating: p.rating
+        }))
     });
 });
 
@@ -1372,7 +1451,10 @@ app.post('/api/admin/manual-reset', async (req, res) => {
     rosterReleased = false;
     lastResetWeek = week;
     gameDate = calculateNextFriday();
-    playerSignupCode = generateRandomCode();
+    
+    // Keep existing code - DO NOT generate new one
+    // playerSignupCode stays the same
+    
     currentWeekData = {
         weekNumber: week,
         year: year,
@@ -1389,7 +1471,7 @@ app.post('/api/admin/manual-reset', async (req, res) => {
         console.error('Error resetting:', err);
     }
     
-    res.json({ success: true, message: "Manual reset completed", newCode: playerSignupCode });
+    res.json({ success: true, message: "Manual reset completed", code: playerSignupCode });
 });
 
 // Initialize database and start server
@@ -1398,6 +1480,18 @@ initDatabase().then(() => {
     console.log('[STARTUP] Running initial auto-lock check...');
     checkAutoLock();
     checkWeeklyReset();
+    
+    // Schedule auto-roster release every Friday at 6:00 PM ET
+    // Cron format: second minute hour day-of-month month day-of-week
+    // 0 0 18 * * 5 = At 18:00 (6pm) on Friday (5)
+    cron.schedule('0 0 18 * * 5', () => {
+        console.log('[CRON] Friday 6pm ET - Triggering auto roster release');
+        autoReleaseRoster();
+    }, {
+        timezone: 'America/New_York'
+    });
+    
+    console.log('[CRON] Scheduled auto roster release for every Friday at 6:00 PM ET');
     
     app.listen(PORT, () => {
         console.log(`Phan's Friday Hockey server running on port ${PORT}`);
@@ -1417,6 +1511,14 @@ initDatabase().then(() => {
     console.log('[STARTUP] Running initial auto-lock check (fallback mode)...');
     checkAutoLock();
     checkWeeklyReset();
+    
+    // Schedule auto-roster release even in fallback mode
+    cron.schedule('0 0 18 * * 5', () => {
+        console.log('[CRON] Friday 6pm ET - Triggering auto roster release');
+        autoReleaseRoster();
+    }, {
+        timezone: 'America/New_York'
+    });
     
     app.listen(PORT, () => {
         console.log(`Server running on port ${PORT} (file fallback mode)`);
