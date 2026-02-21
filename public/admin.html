@@ -565,6 +565,63 @@
             50% { opacity: 0.8; }
         }
 
+        /* History Management Section */
+        .history-delete-box {
+            background: linear-gradient(135deg, #3a1a1a, #4d2d2d);
+            border: 2px solid #ff4444;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .history-delete-box h3 {
+            margin: 0 0 15px 0;
+            color: #ff4444;
+            font-size: 1.1rem;
+        }
+
+        .history-select {
+            background: #3d3d3d;
+            border: 1px solid #555;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 1rem;
+            flex: 1;
+        }
+
+        .delete-btn {
+            background: #ff4444;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .delete-btn:hover {
+            background: #ff6666;
+        }
+
+        .delete-result {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            display: none;
+        }
+
+        .delete-result.success {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid #4CAF50;
+            color: #4CAF50;
+            display: block;
+        }
+
+        .delete-result.error {
+            background: rgba(255, 68, 68, 0.2);
+            border: 1px solid #ff4444;
+            color: #ff4444;
+            display: block;
+        }
+
         @media (max-width: 600px) {
             .container { padding: 20px; }
             th, td { padding: 8px; font-size: 0.8rem; }
@@ -706,6 +763,23 @@
                     Past weeks are automatically archived
                 </div>
             </div>
+        </div>
+
+        <!-- History Management Section - DELETE OLD ROSTERS -->
+        <div class="history-delete-box">
+            <h3>🗑️ Delete Old History</h3>
+            <div class="control-row" style="margin-bottom: 10px;">
+                <select id="historySelect" class="history-select">
+                    <option value="">-- Select a week to delete --</option>
+                </select>
+                <button class="control-btn" onclick="loadHistoryList()" style="background: #4a90e2; margin-left: 10px;">
+                    🔄 Refresh
+                </button>
+            </div>
+            <button class="delete-btn" onclick="deleteSelectedHistory()">
+                ❌ Delete Selected Week from History
+            </button>
+            <div id="deleteResult" class="delete-result"></div>
         </div>
 
         <!-- Pre-defined Goalies Section - YOUR GOALIES -->
@@ -856,6 +930,8 @@
                     showDashboard();
                     loadData();
                     loadSettings();
+                    // Load history list after login
+                    setTimeout(loadHistoryList, 500);
                 } else {
                     localStorage.removeItem(SESSION_KEY);
                     sessionToken = "";
@@ -892,6 +968,8 @@
                     showDashboard();
                     loadData();
                     loadSettings();
+                    // Load history list after login
+                    setTimeout(loadHistoryList, 500);
                 } else {
                     document.getElementById('errorMsg').style.display = 'block';
                 }
@@ -1581,6 +1659,84 @@
                 }
             } catch (err) {
                 console.error("Add player error:", err);
+            }
+        }
+
+        // --- HISTORY MANAGEMENT FUNCTIONS ---
+        
+        async function loadHistoryList() {
+            const select = document.getElementById('historySelect');
+            const resultDiv = document.getElementById('deleteResult');
+            
+            try {
+                const res = await fetch(`${API_URL}/api/history`);
+                const data = await res.json();
+                
+                select.innerHTML = '<option value="">-- Select a week to delete --</option>';
+                
+                if (data.history && data.history.length > 0) {
+                    data.history.forEach(week => {
+                        const option = document.createElement('option');
+                        option.value = `${week.year}-${week.weekNumber}`;
+                        const date = new Date(week.created);
+                        option.text = `Week ${week.weekNumber}, ${week.year} (${date.toLocaleDateString()})`;
+                        select.appendChild(option);
+                    });
+                    resultDiv.className = 'delete-result success';
+                    resultDiv.innerHTML = `✅ Loaded ${data.history.length} weeks from history`;
+                } else {
+                    select.innerHTML = '<option value="">No history available</option>';
+                    resultDiv.className = 'delete-result error';
+                    resultDiv.innerHTML = '⚠️ No history found';
+                }
+                
+            } catch (err) {
+                console.error("Error loading history list:", err);
+                resultDiv.className = 'delete-result error';
+                resultDiv.innerHTML = '❌ Error loading history';
+            }
+        }
+        
+        async function deleteSelectedHistory() {
+            const select = document.getElementById('historySelect');
+            const resultDiv = document.getElementById('deleteResult');
+            const value = select.value;
+            
+            if (!value) {
+                alert("Please select a week to delete");
+                return;
+            }
+            
+            const [year, week] = value.split('-');
+            
+            if (!confirm(`⚠️ WARNING: This will permanently delete Week ${week}, ${year} from history.\n\nThis action cannot be undone!\n\nContinue?`)) {
+                return;
+            }
+            
+            try {
+                const res = await fetch(`${API_URL}/api/admin/history/${year}/${week}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionToken: sessionToken })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    resultDiv.className = 'delete-result success';
+                    resultDiv.innerHTML = `✅ ${data.message}`;
+                    // Refresh the list
+                    loadHistoryList();
+                } else if (res.status === 401) {
+                    logout();
+                } else {
+                    const err = await res.json();
+                    resultDiv.className = 'delete-result error';
+                    resultDiv.innerHTML = `❌ Error: ${err.error || 'Failed to delete'}`;
+                }
+            } catch (err) {
+                console.error("Error deleting history:", err);
+                resultDiv.className = 'delete-result error';
+                resultDiv.innerHTML = '❌ Network error';
             }
         }
 
