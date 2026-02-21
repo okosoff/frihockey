@@ -103,9 +103,10 @@ function getWeekNumber(date) {
     };
 }
 
-// --- MODIFIED: Lock based on roster release status ---
-// LOCKED: Friday 6pm (roster release) → Monday 6pm ET
-// OPEN: Monday 6pm → Friday 6pm (roster release)
+// --- MODIFIED: Lock schedule ---
+// LOCKED: Saturday 12am (reset) → Monday 6pm ET
+// OPEN: Monday 6pm ET → Friday 6pm ET
+// LOCKED: Friday 6pm ET (roster release) → Monday 6pm ET
 function shouldBeLocked() {
     const etTime = getCurrentETTime();
     const day = etTime.getDay(); // 0 = Sunday, 1 = Monday, 5 = Friday, 6 = Saturday
@@ -113,67 +114,72 @@ function shouldBeLocked() {
     
     console.log(`[AUTO-LOCK CHECK] ET Time: ${etTime.toLocaleString('en-US', {weekday: 'short', hour: '2-digit', minute: '2-digit'})}, Day: ${day}, Hour: ${hour}`);
     
-    // If roster was released, keep locked until Monday 6:00 PM
-    if (rosterReleased) {
-        // Friday after release (day 5, hour >= 18) through Sunday (day 0) 
-        // AND Monday before 6pm (day 1, hour < 18)
-        if (day === 5 && hour >= 18) {
-            console.log('[AUTO-LOCK] Roster released - Friday after 6pm - SHOULD LOCK');
-            return true;
-        }
-        if (day === 6) {
-            console.log('[AUTO-LOCK] Roster released - Saturday - SHOULD LOCK');
-            return true;
-        }
-        if (day === 0) {
-            console.log('[AUTO-LOCK] Roster released - Sunday - SHOULD LOCK');
-            return true;
-        }
-        if (day === 1 && hour < 18) {
-            console.log('[AUTO-LOCK] Roster released - Monday before 6pm - SHOULD LOCK');
-            return true;
-        }
-        // Monday 6pm onwards - OPEN (until next Friday 6pm when roster releases)
-        console.log('[AUTO-LOCK] Roster released but outside lock window - SHOULD OPEN');
-        return false;
+    // Saturday (after reset) through Monday before 6pm = LOCKED
+    if (day === 6) {
+        // Saturday - LOCKED (reset happened at 12am)
+        console.log('[AUTO-LOCK] Saturday after reset - SHOULD LOCK');
+        return true;
+    }
+    if (day === 0) {
+        // Sunday - LOCKED
+        console.log('[AUTO-LOCK] Sunday - SHOULD LOCK');
+        return true;
+    }
+    if (day === 1 && hour < 18) {
+        // Monday before 6pm - LOCKED
+        console.log('[AUTO-LOCK] Monday before 6pm - SHOULD LOCK');
+        return true;
     }
     
-    // Roster not released yet - signup is OPEN
-    console.log('[AUTO-LOCK] Roster not released - SHOULD OPEN');
+    // If roster was released, also lock from Friday 6pm onwards
+    if (rosterReleased && day === 5 && hour >= 18) {
+        console.log('[AUTO-LOCK] Roster released - Friday after 6pm - SHOULD LOCK');
+        return true;
+    }
+    
+    // All other times = OPEN (Monday 6pm to Friday 6pm, before roster release)
+    console.log('[AUTO-LOCK] Outside lock window - SHOULD OPEN');
     return false;
 }
 
-// FIXED: Enhanced checkAutoLock with roster release protection
+// FIXED: Enhanced checkAutoLock
 function checkAutoLock() {
     console.log('[AUTO-LOCK] Running check at:', new Date().toISOString());
     
-    // CRITICAL: If roster was released, keep it locked regardless of time window
-    if (rosterReleased) {
-        if (!requirePlayerCode) {
-            console.log('[AUTO-LOCK] Roster is released - forcing lock');
-            requirePlayerCode = true;
-            manualOverride = false;
-            saveData();
-        }
-        return { 
-            requirePlayerCode: true, 
-            manualOverride: false, 
-            isLockedWindow: true,
-            rosterReleased: true 
-        };
-    }
-    
     const shouldLock = shouldBeLocked();
     
+    // If roster was released, ensure we stay locked
+    if (rosterReleased) {
+        const etTime = getCurrentETTime();
+        const day = etTime.getDay();
+        const hour = etTime.getHours();
+        
+        // Keep locked from Friday 6pm through Monday 6pm
+        if ((day === 5 && hour >= 18) || day === 6 || day === 0 || (day === 1 && hour < 18)) {
+            if (!requirePlayerCode) {
+                console.log('[AUTO-LOCK] Roster released - forcing lock');
+                requirePlayerCode = true;
+                manualOverride = false;
+                saveData();
+            }
+            return { 
+                requirePlayerCode: true, 
+                manualOverride: false, 
+                isLockedWindow: true,
+                rosterReleased: true 
+            };
+        }
+    }
+    
     if (shouldLock) {
-        // In lock window (Fri 6pm - Mon 6pm)
+        // In lock window (Sat 12am - Mon 6pm, or Fri 6pm - Mon 6pm if roster released)
         if (manualOverride) {
             manualOverride = false;
             console.log("[AUTO-LOCK] Auto-schedule restored - entering lock window");
         }
         if (!requirePlayerCode) {
             requirePlayerCode = true;
-            console.log("[AUTO-LOCK] 🔒 LOCKED: Friday 6pm to Monday 6pm ET");
+            console.log("[AUTO-LOCK] 🔒 LOCKED");
         }
         saveData();
     } else {
@@ -254,6 +260,7 @@ async function autoReleaseRoster() {
 }
 
 // --- MODIFIED: Weekly Reset at Saturday 12:00 AM (midnight) ET ---
+// Signup stays LOCKED after reset until Monday 6pm
 function checkWeeklyReset() {
     const etTime = getCurrentETTime();
     const { week: currentWeek, year: currentYear } = getWeekNumber(etTime);
@@ -294,12 +301,12 @@ function checkWeeklyReset() {
             darkTeam: []
         };
         
-        // Signup is OPEN after reset (until Friday 6pm when roster releases)
-        requirePlayerCode = false;
+        // CRITICAL: Signup stays LOCKED after reset until Monday 6pm
+        requirePlayerCode = true;
         manualOverride = false;
         
         saveData();
-        console.log("[WEEKLY RESET] ✅ New week started - registration reset, code kept: " + playerSignupCode);
+        console.log("[WEEKLY RESET] ✅ New week started - registration reset, signup LOCKED until Monday 6pm, code kept: " + playerSignupCode);
     }
 }
 
