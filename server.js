@@ -133,59 +133,82 @@ function shouldBeLocked() {
     return false;
 }
 
-// FIXED: Enhanced checkAutoLock with better logging and immediate response
+// FIXED: Enhanced checkAutoLock with roster release protection
 function checkAutoLock() {
     console.log('[AUTO-LOCK] Running check at:', new Date().toISOString());
+    
+    // CRITICAL: If roster was released, keep it locked regardless of time window
+    if (rosterReleased) {
+        if (!requirePlayerCode) {
+            console.log('[AUTO-LOCK] Roster is released - forcing lock');
+            requirePlayerCode = true;
+            manualOverride = false;
+            saveData();
+        }
+        return { 
+            requirePlayerCode: true, 
+            manualOverride: false, 
+            isLockedWindow: true,
+            rosterReleased: true 
+        };
+    }
     
     const shouldLock = shouldBeLocked();
     
     if (shouldLock) {
-        // CRITICAL FIX: Always enforce lock during locked window (Sat 12am - Mon 6pm ET)
+        // In lock window (Sat 12am - Mon 6pm)
         if (manualOverride) {
             manualOverride = false;
-            console.log("[AUTO-LOCK] Auto-schedule restored - entering mandatory lock window (Sat-Mon)");
+            console.log("[AUTO-LOCK] Auto-schedule restored - entering lock window");
         }
         if (!requirePlayerCode) {
             requirePlayerCode = true;
-            console.log("[AUTO-LOCK] 🔒 LOCKED: Saturday 12am to Monday 6pm ET window active");
-        } else {
-            console.log("[AUTO-LOCK] Already locked, no change needed");
+            console.log("[AUTO-LOCK] 🔒 LOCKED: Saturday 12am to Monday 6pm ET");
         }
         saveData();
     } else {
-        // Outside locked window (Mon 6pm - Sat 12am) - respect manual override
+        // Outside lock window (Mon 6pm - Sat 12am)
         if (!manualOverride && requirePlayerCode) {
             requirePlayerCode = false;
-            console.log("[AUTO-LOCK] ✅ OPEN: Monday 6pm ET reached - signup opened");
+            console.log("[AUTO-LOCK] ✅ OPEN: Monday 6pm ET reached");
             saveData();
-        } else if (manualOverride) {
-            console.log("[AUTO-LOCK] Manual override active - keeping current state");
-        } else {
-            console.log("[AUTO-LOCK] Already open, no change needed");
         }
     }
     
-    return { requirePlayerCode, manualOverride, isLockedWindow: shouldLock };
+    return { 
+        requirePlayerCode, 
+        manualOverride, 
+        isLockedWindow: shouldLock,
+        rosterReleased 
+    };
 }
 
-// --- NEW: AUTO ROSTER RELEASE FUNCTION ---
+// --- FIXED: AUTO ROSTER RELEASE FUNCTION ---
 async function autoReleaseRoster() {
-    console.log('[AUTO-RELEASE] Checking if roster should be released...');
+    console.log('[AUTO-RELEASE] Checking conditions...');
     
     const etTime = getCurrentETTime();
-    const day = etTime.getDay();
-    const hour = etTime.getHours();
+    const day = etTime.getDay();    // 5 = Friday
+    const hour = etTime.getHours(); // 18 = 6pm
+    const minute = etTime.getMinutes();
     
-    // Only release on Friday at 6pm if not already released and players exist
+    // Only release on Friday at 6:00 PM (18:00) if not already released and players exist
     if (day === 5 && hour === 18 && !rosterReleased && players.length > 0) {
-        console.log('[AUTO-RELEASE] 🏒 Friday 6pm ET - Auto-releasing roster!');
+        console.log('[AUTO-RELEASE] 🏒 Friday 6:00 PM ET - Auto-releasing roster!');
         
         try {
             const { week, year } = getWeekNumber(etTime);
             
-            console.log('[AUTO-RELEASE] Generating teams...');
+            console.log('[AUTO-RELEASE] Generating balanced teams...');
             const teams = generateFairTeams();
+            
+            // Mark as released
             rosterReleased = true;
+            
+            // LOCK SIGNUP IMMEDIATELY after auto-release
+            requirePlayerCode = true;
+            manualOverride = false;
+            console.log('[AUTO-RELEASE] 🔒 Signup LOCKED after auto roster release');
             
             currentWeekData = {
                 weekNumber: week,
@@ -194,11 +217,6 @@ async function autoReleaseRoster() {
                 whiteTeam: teams.whiteTeam,
                 darkTeam: teams.darkTeam
             };
-            
-            // Lock signup immediately after release
-            requirePlayerCode = true;
-            manualOverride = false; // Ensure auto-lock takes over
-            console.log('[AUTO-RELEASE] 🔒 Signup locked after roster release');
             
             // Save team assignments to database
             for (const player of players) {
@@ -209,19 +227,18 @@ async function autoReleaseRoster() {
             await saveWeekHistory(year, week, teams.whiteTeam, teams.darkTeam);
             await saveData();
             
-            console.log(`[AUTO-RELEASE] ✅ Roster released! White: ${teams.whiteTeam.length}, Dark: ${teams.darkTeam.length}`);
-            console.log(`[AUTO-RELEASE] 💾 Saved to history: Week ${week}, ${year}`);
+            console.log(`[AUTO-RELEASE] ✅ Success! White: ${teams.whiteTeam.length}, Dark: ${teams.darkTeam.length}`);
             
         } catch (error) {
-            console.error('[AUTO-RELEASE] ❌ Error auto-releasing roster:', error);
+            console.error('[AUTO-RELEASE] ❌ Error:', error);
         }
     } else {
         if (rosterReleased) {
-            console.log('[AUTO-RELEASE] Roster already released this week');
+            console.log('[AUTO-RELEASE] Already released this week');
         } else if (players.length === 0) {
-            console.log('[AUTO-RELEASE] No players registered, skipping release');
+            console.log('[AUTO-RELEASE] No players registered');
         } else {
-            console.log(`[AUTO-RELEASE] Not Friday 6pm (Day: ${day}, Hour: ${hour}), skipping`);
+            console.log(`[AUTO-RELEASE] Not Friday 6:00 PM (Day: ${day}, Hour: ${hour}, Min: ${minute})`);
         }
     }
 }
@@ -980,7 +997,6 @@ app.post('/api/register-final', async (req, res) => {
     
     if (!tempData || !tempData.firstName) {
         return res.status(400).json({ error: "Registration data missing." });
-    
     }
     
     if (isDuplicatePlayer(tempData.firstName, tempData.lastName, tempData.phone)) {
@@ -1427,19 +1443,19 @@ app.post('/api/admin/toggle-paid', async (req, res) => {
     }
 });
 
-// --- MODIFIED: Manual roster release now locks signup ---
+// --- FIXED: Manual roster release with guaranteed lock ---
 app.post('/api/admin/release-roster', async (req, res) => {
     const { password, sessionToken } = req.body;
     
-    console.log('Release roster requested');
+    console.log('[MANUAL RELEASE] Request received');
     
     if (!adminSessions[sessionToken]) {
-        console.log('Unauthorized: Invalid session');
+        console.log('[MANUAL RELEASE] Unauthorized: Invalid session');
         return res.status(401).json({ error: "Unauthorized" });
     }
     
     if (players.length === 0) {
-        console.log('No players to release');
+        console.log('[MANUAL RELEASE] No players to release');
         return res.status(400).json({ error: "No players registered yet" });
     }
     
@@ -1447,14 +1463,16 @@ app.post('/api/admin/release-roster', async (req, res) => {
         const etTime = getCurrentETTime();
         const { week, year } = getWeekNumber(etTime);
         
-        console.log('Generating teams...');
+        console.log('[MANUAL RELEASE] Generating teams...');
         const teams = generateFairTeams();
+        
+        // Set roster released FIRST
         rosterReleased = true;
         
-        // --- NEW: Lock signup immediately after manual roster release ---
+        // LOCK SIGNUP IMMEDIATELY - Force lock regardless of time window
         requirePlayerCode = true;
         manualOverride = false;
-        console.log('[MANUAL RELEASE] 🔒 Signup locked after manual roster release');
+        console.log('[MANUAL RELEASE] 🔒 Signup LOCKED after manual roster release');
         
         currentWeekData = {
             weekNumber: week,
@@ -1464,6 +1482,7 @@ app.post('/api/admin/release-roster', async (req, res) => {
             darkTeam: teams.darkTeam
         };
         
+        // Save team assignments to database
         for (const player of players) {
             await pool.query('UPDATE players SET team = $1 WHERE id = $2', [player.team, player.id]);
         }
@@ -1471,18 +1490,20 @@ app.post('/api/admin/release-roster', async (req, res) => {
         await saveWeekHistory(year, week, teams.whiteTeam, teams.darkTeam);
         await saveData();
         
-        console.log('Roster released successfully');
+        console.log('[MANUAL RELEASE] ✅ Success - Roster released and locked');
         
         res.json({ 
             success: true, 
-            message: "Roster released and saved to history. Signup is now locked.",
+            message: "Roster released successfully. Signup is now LOCKED.",
             whiteTeam: teams.whiteTeam,
             darkTeam: teams.darkTeam,
             whiteRating: teams.whiteRating.toFixed(1),
-            darkRating: teams.darkRating.toFixed(1)
+            darkRating: teams.darkRating.toFixed(1),
+            signupLocked: true,
+            rosterReleased: true
         });
     } catch (error) {
-        console.error('Error in release roster:', error);
+        console.error('[MANUAL RELEASE] ❌ Error:', error);
         res.status(500).json({ error: "Server error: " + error.message });
     }
 });
@@ -1541,17 +1562,14 @@ initDatabase().then(() => {
     checkAutoLock();
     checkWeeklyReset();
     
-    // Schedule auto-roster release every Friday at 6:00 PM ET
-    // Cron format: second minute hour day-of-month month day-of-week
-    // 0 0 18 * * 5 = At 18:00 (6pm) on Friday (5)
-    cron.schedule('0 0 18 * * 5', () => {
-        console.log('[CRON] Friday 6pm ET - Triggering auto roster release');
+    // Schedule auto roster release - runs every minute to check for exact 6:00 PM Friday
+    cron.schedule('* * * * *', () => {
         autoReleaseRoster();
     }, {
         timezone: 'America/New_York'
     });
     
-    console.log('[CRON] Scheduled auto roster release for every Friday at 6:00 PM ET');
+    console.log('[CRON] Scheduled auto roster release check every minute (America/New_York)');
     
     app.listen(PORT, () => {
         console.log(`Phan's Friday Hockey server running on port ${PORT}`);
@@ -1572,9 +1590,8 @@ initDatabase().then(() => {
     checkAutoLock();
     checkWeeklyReset();
     
-    // Schedule auto-roster release even in fallback mode
-    cron.schedule('0 0 18 * * 5', () => {
-        console.log('[CRON] Friday 6pm ET - Triggering auto roster release');
+    // Schedule auto roster release even in fallback mode
+    cron.schedule('* * * * *', () => {
         autoReleaseRoster();
     }, {
         timezone: 'America/New_York'
