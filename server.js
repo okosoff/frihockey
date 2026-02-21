@@ -33,6 +33,7 @@ let gameDate = "";
 let playerSignupCode = generateRandomCode();
 let requirePlayerCode = true;
 let manualOverride = false;
+let manualOverrideState = null; // 'locked' or 'open' - persists until next auto event
 
 // Store admin sessions
 let adminSessions = {};
@@ -103,7 +104,7 @@ function getWeekNumber(date) {
     };
 }
 
-// --- MODIFIED: Lock schedule ---
+// --- MODIFIED: Lock schedule with manual override support ---
 // LOCKED: Saturday 12am (reset) → Monday 6pm ET
 // OPEN: Monday 6pm ET → Friday 6pm ET
 // LOCKED: Friday 6pm ET (roster release) → Monday 6pm ET
@@ -142,58 +143,103 @@ function shouldBeLocked() {
     return false;
 }
 
-// FIXED: Enhanced checkAutoLock
+// FIXED: Enhanced checkAutoLock with manual override support
 function checkAutoLock() {
     console.log('[AUTO-LOCK] Running check at:', new Date().toISOString());
     
-    const shouldLock = shouldBeLocked();
+    const etTime = getCurrentETTime();
+    const day = etTime.getDay();
+    const hour = etTime.getHours();
     
-    // If roster was released, ensure we stay locked
+    // If roster was released, ensure we stay locked until Monday 6pm
     if (rosterReleased) {
-        const etTime = getCurrentETTime();
-        const day = etTime.getDay();
-        const hour = etTime.getHours();
-        
         // Keep locked from Friday 6pm through Monday 6pm
         if ((day === 5 && hour >= 18) || day === 6 || day === 0 || (day === 1 && hour < 18)) {
+            // Check if manual override wants to open (only allow if not in critical lock period)
+            if (manualOverride && manualOverrideState === 'open') {
+                console.log('[AUTO-LOCK] Manual override to OPEN during roster lock - RESPECTING OVERRIDE');
+                if (requirePlayerCode) {
+                    requirePlayerCode = false;
+                    saveData();
+                }
+                return { 
+                    requirePlayerCode: false, 
+                    manualOverride: true, 
+                    manualOverrideState: manualOverrideState,
+                    isLockedWindow: true,
+                    rosterReleased: true 
+                };
+            }
+            
             if (!requirePlayerCode) {
                 console.log('[AUTO-LOCK] Roster released - forcing lock');
                 requirePlayerCode = true;
                 manualOverride = false;
+                manualOverrideState = null;
                 saveData();
             }
             return { 
                 requirePlayerCode: true, 
                 manualOverride: false, 
+                manualOverrideState: null,
                 isLockedWindow: true,
                 rosterReleased: true 
             };
         }
     }
     
-    if (shouldLock) {
-        // In lock window (Sat 12am - Mon 6pm, or Fri 6pm - Mon 6pm if roster released)
-        if (manualOverride) {
-            manualOverride = false;
-            console.log("[AUTO-LOCK] Auto-schedule restored - entering lock window");
+    const shouldLock = shouldBeLocked();
+    
+    // Handle manual override - admin has manually set a state
+    if (manualOverride && manualOverrideState) {
+        console.log(`[AUTO-LOCK] Manual override active: ${manualOverrideState}`);
+        
+        if (manualOverrideState === 'locked') {
+            if (!requirePlayerCode) {
+                requirePlayerCode = true;
+                saveData();
+            }
+            return { 
+                requirePlayerCode: true, 
+                manualOverride: true, 
+                manualOverrideState: 'locked',
+                isLockedWindow: shouldLock,
+                rosterReleased 
+            };
+        } else if (manualOverrideState === 'open') {
+            if (requirePlayerCode) {
+                requirePlayerCode = false;
+                saveData();
+            }
+            return { 
+                requirePlayerCode: false, 
+                manualOverride: true, 
+                manualOverrideState: 'open',
+                isLockedWindow: shouldLock,
+                rosterReleased 
+            };
         }
+    }
+    
+    // Auto-schedule logic (no manual override)
+    if (shouldLock) {
         if (!requirePlayerCode) {
             requirePlayerCode = true;
-            console.log("[AUTO-LOCK] 🔒 LOCKED");
+            console.log("[AUTO-LOCK] 🔒 LOCKED by schedule");
+            saveData();
         }
-        saveData();
     } else {
-        // Outside lock window (Mon 6pm - Fri 6pm)
-        if (!manualOverride && requirePlayerCode) {
+        if (requirePlayerCode) {
             requirePlayerCode = false;
-            console.log("[AUTO-LOCK] ✅ OPEN: Monday 6pm ET reached");
+            console.log("[AUTO-LOCK] ✅ OPEN by schedule (Monday 6pm ET)");
             saveData();
         }
     }
     
     return { 
         requirePlayerCode, 
-        manualOverride, 
+        manualOverride: false, 
+        manualOverrideState: null,
         isLockedWindow: shouldLock,
         rosterReleased 
     };
@@ -224,6 +270,7 @@ async function autoReleaseRoster() {
             // LOCK SIGNUP IMMEDIATELY after auto-release
             requirePlayerCode = true;
             manualOverride = false;
+            manualOverrideState = null;
             console.log('[AUTO-RELEASE] 🔒 Signup LOCKED after auto roster release');
             
             currentWeekData = {
@@ -260,7 +307,7 @@ async function autoReleaseRoster() {
 }
 
 // --- MODIFIED: Weekly Reset at Saturday 12:00 AM (midnight) ET ---
-// Signup stays LOCKED after reset until Monday 6pm
+// Signup stays LOCKED after reset until Monday 6pm (unless manually overridden)
 function checkWeeklyReset() {
     const etTime = getCurrentETTime();
     const { week: currentWeek, year: currentYear } = getWeekNumber(etTime);
@@ -301,9 +348,11 @@ function checkWeeklyReset() {
             darkTeam: []
         };
         
-        // CRITICAL: Signup stays LOCKED after reset until Monday 6pm
-        requirePlayerCode = true;
+        // CRITICAL: Signup stays LOCKED after reset until Monday 6pm (unless manually overridden)
+        // Clear any previous manual override from last week
         manualOverride = false;
+        manualOverrideState = null;
+        requirePlayerCode = true;
         
         saveData();
         console.log("[WEEKLY RESET] ✅ New week started - registration reset, signup LOCKED until Monday 6pm, code kept: " + playerSignupCode);
@@ -398,6 +447,7 @@ async function loadDataFromDB() {
         if (settings.playerSignupCode) playerSignupCode = settings.playerSignupCode;
         if (settings.requirePlayerCode !== undefined) requirePlayerCode = settings.requirePlayerCode;
         if (settings.manualOverride !== undefined) manualOverride = settings.manualOverride;
+        if (settings.manualOverrideState !== undefined) manualOverrideState = settings.manualOverrideState;
         if (settings.lastResetWeek) lastResetWeek = settings.lastResetWeek;
         if (settings.rosterReleased !== undefined) rosterReleased = settings.rosterReleased;
         if (settings.currentWeekData) currentWeekData = settings.currentWeekData;
@@ -456,6 +506,7 @@ async function saveData() {
         await saveSetting('playerSignupCode', playerSignupCode);
         await saveSetting('requirePlayerCode', requirePlayerCode);
         await saveSetting('manualOverride', manualOverride);
+        await saveSetting('manualOverrideState', manualOverrideState);
         await saveSetting('lastResetWeek', lastResetWeek);
         await saveSetting('rosterReleased', rosterReleased);
         await saveSetting('currentWeekData', currentWeekData);
@@ -484,6 +535,7 @@ function loadDataFromFile() {
             playerSignupCode = data.playerSignupCode ?? generateRandomCode();
             requirePlayerCode = data.requirePlayerCode ?? true;
             manualOverride = data.manualOverride ?? false;
+            manualOverrideState = data.manualOverrideState ?? null;
             lastResetWeek = data.lastResetWeek ?? null;
             rosterReleased = data.rosterReleased ?? false;
             currentWeekData = data.currentWeekData ?? {
@@ -516,6 +568,7 @@ function saveDataToFile() {
             playerSignupCode,
             requirePlayerCode,
             manualOverride,
+            manualOverrideState,
             lastResetWeek,
             rosterReleased,
             currentWeekData
@@ -786,6 +839,7 @@ app.get('/api/debug-time', (req, res) => {
         shouldBeLocked: shouldLock,
         requirePlayerCode: requirePlayerCode,
         manualOverride: manualOverride,
+        manualOverrideState: manualOverrideState,
         rosterReleased: rosterReleased
     });
 });
@@ -840,6 +894,8 @@ app.get('/api/status', (req, res) => {
         waitlistCount: waitlist.length,
         requireCode: requirePlayerCode,
         isLockedWindow: lockStatus.isLockedWindow,
+        manualOverride: lockStatus.manualOverride,
+        manualOverrideState: lockStatus.manualOverrideState,
         location: gameLocation,
         time: gameTime,
         date: gameDate,
@@ -1174,6 +1230,7 @@ app.post('/api/admin/settings', (req, res) => {
         requireCode: requirePlayerCode,
         isLockedWindow: lockStatus.isLockedWindow,
         manualOverride: manualOverride,
+        manualOverrideState: manualOverrideState,
         location: gameLocation,
         time: gameTime,
         date: gameDate,
@@ -1231,38 +1288,53 @@ app.post('/api/admin/update-code', (req, res) => {
     });
 });
 
+// --- MODIFIED: Toggle code with manual override support ---
 app.post('/api/admin/toggle-code', (req, res) => {
     const { password, sessionToken } = req.body;
     if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
         return res.status(401).send("Unauthorized");
     }
     
-    requirePlayerCode = !requirePlayerCode;
+    // Toggle the current state and set manual override
+    const newRequireCode = !requirePlayerCode;
+    
+    requirePlayerCode = newRequireCode;
     manualOverride = true;
+    manualOverrideState = newRequireCode ? 'locked' : 'open';
+    
     saveData();
+    
+    console.log(`[ADMIN] Manual override set: ${manualOverrideState}`);
     
     res.json({ 
         success: true, 
         requireCode: requirePlayerCode,
         manualOverride: manualOverride,
+        manualOverrideState: manualOverrideState,
         code: playerSignupCode 
     });
 });
 
+// --- MODIFIED: Reset schedule to auto mode ---
 app.post('/api/admin/reset-schedule', (req, res) => {
     const { password, sessionToken } = req.body;
     if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
         return res.status(401).send("Unauthorized");
     }
     
+    // Clear manual override and let auto-schedule take over
     manualOverride = false;
-    checkAutoLock();
-    saveData();
+    manualOverrideState = null;
+    
+    // Run check to apply correct auto state
+    const result = checkAutoLock();
     
     res.json({ 
         success: true, 
         requireCode: requirePlayerCode,
-        manualOverride: manualOverride
+        manualOverride: manualOverride,
+        manualOverrideState: manualOverrideState,
+        message: "Auto-schedule restored"
     });
 });
 
@@ -1542,6 +1614,7 @@ app.post('/api/admin/release-roster', async (req, res) => {
         // LOCK SIGNUP IMMEDIATELY - Force lock regardless of time window
         requirePlayerCode = true;
         manualOverride = false;
+        manualOverrideState = null;
         console.log('[MANUAL RELEASE] 🔒 Signup LOCKED after manual roster release');
         
         currentWeekData = {
