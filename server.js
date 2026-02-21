@@ -253,16 +253,16 @@ async function autoReleaseRoster() {
     }
 }
 
-// --- MODIFIED: Weekly Reset at Friday 11pm ET ---
+// --- MODIFIED: Weekly Reset at Saturday 12:00 AM (midnight) ET ---
 function checkWeeklyReset() {
     const etTime = getCurrentETTime();
     const { week: currentWeek, year: currentYear } = getWeekNumber(etTime);
-    const day = etTime.getDay(); // 5 = Friday
+    const day = etTime.getDay(); // 6 = Saturday
     const hour = etTime.getHours();
     
-    // Reset at Friday 11:00 PM (23:00) - day 5, hour 23
-    if (day === 5 && hour === 23 && (lastResetWeek !== currentWeek || currentWeekData.year !== currentYear)) {
-        console.log(`[WEEKLY RESET] 🕚 Friday 11:00 PM ET - Resetting for week ${currentWeek}, ${currentYear}`);
+    // Reset at Saturday 12:00 AM (00:00) - day 6, hour 0
+    if (day === 6 && hour === 0 && (lastResetWeek !== currentWeek || currentWeekData.year !== currentYear)) {
+        console.log(`[WEEKLY RESET] 🕛 Saturday 12:00 AM ET - Resetting for week ${currentWeek}, ${currentYear}`);
         
         // Save current week to history if roster was released
         if (rosterReleased && currentWeekData.weekNumber && 
