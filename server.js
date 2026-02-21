@@ -1427,6 +1427,7 @@ app.post('/api/admin/toggle-paid', async (req, res) => {
     }
 });
 
+// --- MODIFIED: Manual roster release now locks signup ---
 app.post('/api/admin/release-roster', async (req, res) => {
     const { password, sessionToken } = req.body;
     
@@ -1450,6 +1451,11 @@ app.post('/api/admin/release-roster', async (req, res) => {
         const teams = generateFairTeams();
         rosterReleased = true;
         
+        // --- NEW: Lock signup immediately after manual roster release ---
+        requirePlayerCode = true;
+        manualOverride = false;
+        console.log('[MANUAL RELEASE] 🔒 Signup locked after manual roster release');
+        
         currentWeekData = {
             weekNumber: week,
             year: year,
@@ -1469,7 +1475,7 @@ app.post('/api/admin/release-roster', async (req, res) => {
         
         res.json({ 
             success: true, 
-            message: "Roster released and saved to history",
+            message: "Roster released and saved to history. Signup is now locked.",
             whiteTeam: teams.whiteTeam,
             darkTeam: teams.darkTeam,
             whiteRating: teams.whiteRating.toFixed(1),
