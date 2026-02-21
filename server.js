@@ -555,19 +555,34 @@ function isGoalieSpotsAvailable() {
     return getGoalieCount() < MAX_GOALIES;
 }
 
+// --- MODIFIED: Generate teams with alphabetical ordering by first name ---
 function generateFairTeams() {
     console.log('Generating teams from players:', players.length);
     
+    // Separate goalies and skaters
     const goalies = players.filter(p => p.isGoalie);
     const skaters = players.filter(p => !p.isGoalie);
     
-    skaters.sort((a, b) => (parseInt(b.rating) || 0) - (parseInt(a.rating) || 0));
+    // Sort skaters alphabetically by first name, then last name
+    skaters.sort((a, b) => {
+        const nameA = (a.firstName + ' ' + a.lastName).toLowerCase();
+        const nameB = (b.firstName + ' ' + b.lastName).toLowerCase();
+        return nameA.localeCompare(nameB);
+    });
+    
+    // Sort goalies alphabetically by first name too
+    goalies.sort((a, b) => {
+        const nameA = (a.firstName + ' ' + a.lastName).toLowerCase();
+        const nameB = (b.firstName + ' ' + b.lastName).toLowerCase();
+        return nameA.localeCompare(nameB);
+    });
     
     let whiteTeam = [];
     let darkTeam = [];
     let whiteRating = 0;
     let darkRating = 0;
     
+    // Distribute goalies first - one to each team if 2+ goalies
     if (goalies.length >= 2) {
         whiteTeam.push({ ...goalies[0], team: 'White' });
         darkTeam.push({ ...goalies[1], team: 'Dark' });
@@ -578,6 +593,8 @@ function generateFairTeams() {
         whiteRating += parseInt(goalies[0].rating) || 0;
     }
     
+    // Distribute skaters in snake draft order for balance
+    // But maintain alphabetical listing in the final display
     let whiteTurn = whiteTeam.length <= darkTeam.length;
     
     for (let i = 0; i < skaters.length; i++) {
@@ -593,11 +610,29 @@ function generateFairTeams() {
         
         whiteTurn = !whiteTurn;
         
+        // Balance team sizes
         if (Math.abs(whiteTeam.length - darkTeam.length) > 1) {
             whiteTurn = whiteTeam.length < darkTeam.length;
         }
     }
     
+    // Sort each team: goalies first, then alphabetically by first name
+    const sortTeam = (team) => {
+        return team.sort((a, b) => {
+            // Goalies always on top
+            if (a.isGoalie && !b.isGoalie) return -1;
+            if (!a.isGoalie && b.isGoalie) return 1;
+            // Then alphabetical by first name
+            const nameA = (a.firstName + ' ' + a.lastName).toLowerCase();
+            const nameB = (b.firstName + ' ' + b.lastName).toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
+    };
+    
+    whiteTeam = sortTeam(whiteTeam);
+    darkTeam = sortTeam(darkTeam);
+    
+    // Update players array with team assignments
     players = [...whiteTeam, ...darkTeam];
     
     return { whiteTeam, darkTeam, whiteRating, darkRating };
@@ -784,6 +819,7 @@ app.get('/api/waitlist', (req, res) => {
     });
 });
 
+// --- MODIFIED: Roster API with proper sorting ---
 app.get('/api/roster', (req, res) => {
     if (!rosterReleased) {
         return res.json({
@@ -793,17 +829,17 @@ app.get('/api/roster', (req, res) => {
         });
     }
     
-    const whiteTeam = players.filter(p => p.team === 'White').sort((a, b) => {
+    // Sort function: goalies first, then alphabetically by first name
+    const sortPlayers = (a, b) => {
         if (a.isGoalie && !b.isGoalie) return -1;
         if (!a.isGoalie && b.isGoalie) return 1;
-        return (parseInt(b.rating) || 0) - (parseInt(a.rating) || 0);
-    });
+        const nameA = (a.firstName + ' ' + a.lastName).toLowerCase();
+        const nameB = (b.firstName + ' ' + b.lastName).toLowerCase();
+        return nameA.localeCompare(nameB);
+    };
     
-    const darkTeam = players.filter(p => p.team === 'Dark').sort((a, b) => {
-        if (a.isGoalie && !b.isGoalie) return -1;
-        if (!a.isGoalie && b.isGoalie) return 1;
-        return (parseInt(b.rating) || 0) - (parseInt(a.rating) || 0);
-    });
+    const whiteTeam = players.filter(p => p.team === 'White').sort(sortPlayers);
+    const darkTeam = players.filter(p => p.team === 'Dark').sort(sortPlayers);
     
     const whiteRating = whiteTeam.reduce((sum, p) => sum + (parseInt(p.rating) || 0), 0);
     const darkRating = darkTeam.reduce((sum, p) => sum + (parseInt(p.rating) || 0), 0);
@@ -1304,19 +1340,36 @@ app.post('/api/admin/add-player', async (req, res) => {
     }
 });
 
+// --- FIXED: Remove player with proper ID handling ---
 app.post('/api/admin/remove-player', async (req, res) => {
     const { password, sessionToken, playerId } = req.body;
+    
+    console.log('[REMOVE PLAYER] Request received:', { playerId, hasSession: !!sessionToken });
+    
     if (!adminSessions[sessionToken] && password !== ADMIN_PASSWORD) {
+        console.log('[REMOVE PLAYER] Unauthorized');
         return res.status(401).send("Unauthorized");
     }
 
-    const index = players.findIndex(p => p.id === playerId);
+    // Convert playerId to number if it's a string
+    const idToRemove = parseInt(playerId);
+    if (isNaN(idToRemove)) {
+        console.log('[REMOVE PLAYER] Invalid player ID:', playerId);
+        return res.status(400).json({ error: "Invalid player ID" });
+    }
+
+    const index = players.findIndex(p => p.id === idToRemove);
+    console.log('[REMOVE PLAYER] Found player at index:', index);
+    
     if (index === -1) {
+        console.log('[REMOVE PLAYER] Player not found with ID:', idToRemove);
         return res.status(404).json({ error: "Player not found" });
     }
 
     const wasGoalie = players[index].isGoalie;
     const player = players.splice(index, 1)[0];
+    
+    console.log('[REMOVE PLAYER] Removing player:', player.firstName, player.lastName);
     
     try {
         await pool.query('DELETE FROM players WHERE id = $1', [player.id]);
@@ -1326,12 +1379,13 @@ app.post('/api/admin/remove-player', async (req, res) => {
         }
         
         await saveData();
+        console.log('[REMOVE PLAYER] Success! New spots:', playerSpots);
     } catch (err) {
-        console.error('Error removing player:', err);
+        console.error('[REMOVE PLAYER] Error:', err);
         return res.status(500).json({ error: "Database error" });
     }
 
-    res.json({ success: true, spots: playerSpots });
+    res.json({ success: true, spots: playerSpots, removedPlayer: player });
 });
 
 app.post('/api/admin/update-spots', (req, res) => {
