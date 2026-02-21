@@ -728,6 +728,27 @@ async function getWeekHistory(year, weekNumber) {
     }
 }
 
+// --- NEW: DELETE HISTORY FUNCTION ---
+async function deleteWeekHistory(year, weekNumber) {
+    try {
+        const res = await pool.query(
+            'DELETE FROM history WHERE year = $1 AND week_number = $2 RETURNING *',
+            [year, weekNumber]
+        );
+        
+        if (res.rowCount > 0) {
+            console.log(`[DELETE HISTORY] ✅ Deleted Week ${weekNumber}, ${year}`);
+            return { success: true, deleted: res.rowCount };
+        } else {
+            console.log(`[DELETE HISTORY] ⚠️ Week ${weekNumber}, ${year} not found`);
+            return { success: false, error: "Week not found in history" };
+        }
+    } catch (err) {
+        console.error('[DELETE HISTORY] ❌ Error:', err);
+        return { success: false, error: err.message };
+    }
+}
+
 // --- ROUTES ---
 
 // DEBUG ROUTES - Remove in production
@@ -890,6 +911,37 @@ app.get('/api/history/:year/:week', async (req, res) => {
         res.json(weekData);
     } else {
         res.status(404).json({ error: "Week not found" });
+    }
+});
+
+// --- NEW: DELETE HISTORY ENDPOINT ---
+app.delete('/api/admin/history/:year/:week', async (req, res) => {
+    const { password, sessionToken } = req.body;
+    
+    if (!adminSessions[sessionToken]) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+    
+    const { year, week } = req.params;
+    const yearNum = parseInt(year);
+    const weekNum = parseInt(week);
+    
+    if (isNaN(yearNum) || isNaN(weekNum)) {
+        return res.status(400).json({ error: "Invalid year or week number" });
+    }
+    
+    console.log(`[DELETE HISTORY] Admin requested deletion of Week ${weekNum}, ${yearNum}`);
+    
+    const result = await deleteWeekHistory(yearNum, weekNum);
+    
+    if (result.success) {
+        res.json({ 
+            success: true, 
+            message: `Week ${weekNum}, ${yearNum} deleted from history`,
+            deleted: result.deleted
+        });
+    } else {
+        res.status(404).json({ error: result.error });
     }
 });
 
