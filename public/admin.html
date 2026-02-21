@@ -1308,7 +1308,7 @@
         }
 
         async function manualReset() {
-            if (!confirm("⚠️ WARNING: This will reset ALL data for a new week and generate a NEW signup code. Continue?")) return;
+            if (!confirm("⚠️ WARNING: This will reset ALL data for a new week. The signup code will be kept. Continue?")) return;
             try {
                 const res = await fetch(`${API_URL}/api/admin/manual-reset`, {
                     method: 'POST',
@@ -1317,7 +1317,7 @@
                 });
                 if (res.ok) {
                     const data = await res.json();
-                    alert("Week reset complete!\\nNew signup code: " + data.newCode);
+                    alert("Week reset complete!\\nSignup code kept: " + data.code);
                     loadData();
                     loadSettings();
                 } else if (res.status === 401) {
@@ -1464,21 +1464,36 @@
             }
         }
 
+        // --- FIXED: Remove player function with better error handling ---
         async function removePlayer(id) {
             if (!confirm("Remove this player?")) return;
+            
+            console.log("Removing player with ID:", id);
+            
             try {
                 const res = await fetch(`${API_URL}/api/admin/remove-player`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ sessionToken: sessionToken, playerId: id })
                 });
+                
+                console.log("Remove player response status:", res.status);
+                
                 if (res.ok) {
+                    const data = await res.json();
+                    console.log("Player removed successfully:", data);
                     loadData();
+                    alert(`✅ Player removed! Spots remaining: ${data.spots}`);
                 } else if (res.status === 401) {
                     logout();
+                } else {
+                    const err = await res.json();
+                    console.error("Error removing player:", err);
+                    alert("Error: " + (err.error || "Failed to remove player"));
                 }
             } catch (err) {
                 console.error("Remove player error:", err);
+                alert("Error removing player: " + err.message);
             }
         }
 
